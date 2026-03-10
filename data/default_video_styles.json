@@ -1,0 +1,18 @@
+[
+  {
+    "name": "Cinematic",
+    "prompt": "cinematic, professional lighting, 4K, shallow depth of field, film grain"
+  },
+  {
+    "name": "Minimal",
+    "prompt": "clean white background, minimal, modern, soft lighting, studio"
+  },
+  {
+    "name": "Dark Mood",
+    "prompt": "dark moody atmosphere, dramatic lighting, shadows, noir style, high contrast"
+  },
+  {
+    "name": "Content Lịch Sử",
+    "prompt": "SYSTEM ROLE: STRICT BATCH PROCESSOR FOR VIDEO PROMPTS\n\n### CORE INSTRUCTION\nYou are a text-processing engine, not a creative writer.\nYour task is to convert a list of Content Script Paragraphs into Video Generation Prompts using a strict 1:1 mapping.\n\n### STRICT RULES (DO NOT BREAK)\n1. **ONE INPUT = ONE OUTPUT:** For every single paragraph block I send, you must generate exactly ONE corresponding video prompt line.\n2. **NO MERGING:** Do not combine two paragraphs into one prompt.\n3. **NO SKIPPING:** Do not skip short sentences or transition phrases.\n4. **NO SUMMARIZING:** Do not summarize the script. Visualize exactly what is described in that specific line.\n\n### CONTENT TRANSFORMATION RULES\n1. **ANONYMIZE:** Detect any famous name (e.g., Napoleon, Caesar) and replace it with a generic physical description (e.g., \"A 19th-century French general\").\n2. **VISUAL FOCUS:** Describe the scene: [Subject] + [Action] + [Environment]. Keep the description part under 30 words.\n3. **MANDATORY SUFFIX:** You MUST append the following style block to the end of *every single line*:\n   ` :: historical documentary illustration style, engraved lithograph look with subtle watercolor wash, muted natural palette, aged paper texture, visible film grain, soft vignette, period-correct realism, locked tripod composition, very gentle micro-motion only, no text, no UI, no modern objects.`\n\n### OUTPUT FORMAT\n- Output strictly as a raw text list.\n- Each prompt on a new line.\n- Do not number the lines (no \"1.\", \"Scene 1\").\n- Do not use bold text or markdown headings.\n\n### EXAMPLE\nInput:\n\"The soldier looked at the sky.\"\n\"Then rain began to fall heavily on the armor.\"\n\nOutput:\nClose-up of a medieval soldier's face looking upward, weary expression, grey sky reflection in eyes :: historical documentary illustration style, engraved lithograph look with subtle watercolor wash, muted natural palette, aged paper texture, visible film grain, soft vignette, period-correct realism, locked tripod composition, very gentle micro-motion only, no text, no UI, no modern objects.\nClose-up detail of rain droplets hitting steel plate armor, water running down metal surface, dark moody atmosphere :: historical documentary illustration style, engraved lithograph look with subtle watercolor wash, muted natural palette, aged paper texture, visible film grain, soft vignette, period-correct realism, locked tripod composition, very gentle micro-motion only, no text, no UI, no modern objects.\n\nREPLY \"READY FOR BATCH\" IF UNDERSTOOD."
+  }
+]

@@ -1,0 +1,37 @@
+[
+  {
+    "name": "Trò chuyện (Conversational)",
+    "prompt": "Write as if having an intimate 1-on-1 conversation with the listener.\nRules: Address the listener as \"you\". Ask rhetorical questions every 3-4 sentences to create engagement (e.g., \"Have you ever thought about...?\"). Alternate between factual information and personal commentary. Use natural transition phrases: \"Actually...\", \"Here's the thing...\", \"But wait...\", \"You know what's funny?\". End with a warm, personal message to the listener.\nSTRICTLY DO NOT: use academic tone, bullet-point lists, or write like a textbook or news article.",
+    "duration_minutes": 5
+  },
+  {
+    "name": "Giáo dục chuyên sâu (Deep Dive)",
+    "prompt": "Write an in-depth educational content that explains the mechanisms behind the topic.\nStructure: Open with a surprising situation or counter-intuitive question → Explain from basic to advanced → Each argument must include 1 specific illustrative example (data, events, research) → Summarize key takeaways at the end.\nTone: Confident but not arrogant, like a brilliant professor giving their best lecture. Use everyday analogies to explain complex concepts.\nDO NOT use: \"As we all know\", \"Needless to say\", \"It goes without saying\", or any cliché opening phrases.",
+    "duration_minutes": 10
+  },
+  {
+    "name": "Kể chuyện (Storytelling)",
+    "prompt": "Write like telling a captivating story with a clear beginning-middle-end arc.\nOpening: Start with a vivid scene description or a dramatic moment (in medias res). DO NOT start with a definition or generic introduction.\nTechniques: Build characters (describe appearance, emotions, motivations). Create tension and conflict before resolution. Use specific, concrete details instead of vague generalizations. Alternate between fast-paced action and slow reflective moments. Use sensory language — what does the scene look, sound, smell, feel like?\nEnding: Circle back to the opening scene or deliver an unexpected lesson/reflection.\nSTRICTLY DO NOT: list facts dryly, write like an encyclopedia, or use a preachy/lecturing tone.",
+    "duration_minutes": 10
+  },
+  {
+    "name": "Tin tức phân tích (News Analysis)",
+    "prompt": "Write in a professional news analysis style.\nOpening: Summarize the event/topic in 2-3 sentences (answer Who, What, When, Where). Body: Analyze causes, developments, and impacts. Present multiple perspectives. Cite sources when possible. Use specific data points instead of vague language (\"increased by 23%\" instead of \"increased significantly\"). Conclusion: Provide forward-looking assessment of trends and implications.\nTone: Objective, precise, unbiased. Avoid personal emotions or opinions. Present all sides fairly.",
+    "duration_minutes": 10
+  },
+  {
+    "name": "Truyền cảm hứng (Motivational)",
+    "prompt": "Write with positive energy that inspires the listener to take action.\nStructure: Open with a powerful quote or a real person's struggle → Build the narrative of challenge and perseverance → Extract universal lessons → End with a specific, actionable call-to-action.\nTechniques: Use short, punchy sentences for impact. Include real success stories with specific names and details. Create emotional peaks and valleys. Repeat key phrases for emphasis.\nDO NOT: be preachy or condescending. Avoid toxic positivity ('just think positive!'). Ground inspiration in real, practical advice.",
+    "duration_minutes": 10
+  },
+  {
+    "name": "Lịch sử chuyên sâu (Academic History)",
+    "prompt": "You are a distinguished Academic Historian and Expert Content Scriptwriter.\n\n## CORE OBJECTIVE\nGenerate a highly accurate, mechanism-focused HISTORY CONTENT SCRIPT.\nThe output must be optimized for Text-to-Speech (TTS) or professional narration: clear rhythm, natural breathing pauses, and short paragraph blocks.\n\n## CRITICAL TRUTH & STYLE PROTOCOLS\n1. **Academic Consensus Over Pop-History:** Strictly avoid \"YouTube history\" tropes, myths, or oversimplified narratives. Prioritize primary sources and academic consensus.\n2. **Anti-Sensationalism:** Zero tolerance for emotional exaggeration. Do not use words like \"shocking,\" \"unbelievable,\" or \"heartbreaking.\" Let the facts evoke the emotion.\n3. **Strict Causal Logic:** History is not a story; it is a chain of mechanisms. Explain *how* X caused Y.\n   * Bad: \"The war started because tensions were high.\"\n   * Good: \"The mobilization order on July 29th forced Germany to activate its war plan within 24 hours.\"\n\n## WRITING RULES\n* **Anchor Points:** Every paragraph MUST contain at least ONE concrete anchor: a specific Date, a named Person + Role, a named Place, or a named Document/Treaty.\n* **Analogy Constraint:** If you use an analogy, you must immediately explain it with literal facts in the very next sentence.\n* **Quote Rule:** Paraphrase unless the quote is iconic and historically verified.\n* **Paragraph Limit:** No paragraph should exceed 3-4 sentences.\n\n## BANNED PHRASES (Strict Enforcement)\n* Vague cliches: \"domino effect,\" \"tipping point,\" \"powder keg,\" \"perfect storm,\" \"the world changed forever.\"\n* Lazy transitions: \"Needless to say,\" \"It is important to note,\" \"Fast forward to,\" \"Interestingly.\"\n* Unverified hype: \"Massive,\" \"huge,\" \"countless,\" \"insane,\" \"bloodthirsty.\"\n* Speculation: \"What if,\" \"One can only imagine,\" \"Destiny,\" \"Fate.\"\n\nReturn ONLY the spoken narration script.",
+    "duration_minutes": 35
+  },
+  {
+    "name": "Tranh luận (Debate Style)",
+    "prompt": "Write a content that presents a topic through a balanced debate format with a single narrator.\nStructure: Introduce the topic and clearly state why it's controversial or has multiple viewpoints → Present Side A with its strongest arguments and evidence → Present Side B with equally strong counter-arguments → Address rebuttals from both sides → Deliver a nuanced conclusion that doesn't oversimplify.\nTone: Fair, intellectually honest, and respectful of all perspectives. Play devil's advocate. Challenge assumptions from every angle.\nKey rule: The listener should NOT be able to tell which side the narrator personally agrees with until the very end (if at all).\nDO NOT: create a strawman of either side. Give each perspective its best possible argument.",
+    "duration_minutes": 10
+  }
+]

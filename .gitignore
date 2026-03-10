@@ -1,0 +1,21 @@
+# ── User data (never overwrite during updates) ───────────────────────────────
+config.json
+data/config.json
+data/queue_state.json
+data/p2p_shares.json
+data/styles.json
+data/video_styles.json
+output/
+runtime/
+
+# ── Python cache ─────────────────────────────────────────────────────────────
+__pycache__/
+core/__pycache__/
+*.pyc
+*.pyo
+
+# ── OS / IDE ─────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

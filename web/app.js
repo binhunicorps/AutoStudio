@@ -2876,3 +2876,71 @@ function log(msg, cls = "", time = null) {
 }
 function clearLog() { $("log-body").innerHTML = ""; }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Auto-Update Check
+// ═══════════════════════════════════════════════════════════════════════════
+(function autoCheckUpdate() {
+    let attempts = 0;
+    const maxAttempts = 20;
+
+    async function poll() {
+        try {
+            const r = await fetch("/api/check-update");
+            const d = await r.json();
+            if (!d.checked) {
+                if (++attempts < maxAttempts) setTimeout(poll, 5000);
+                return;
+            }
+            if (d.error || !d.has_update) return;
+            showUpdateBanner(d);
+        } catch (_) {}
+    }
+
+    function showUpdateBanner(info) {
+        if ($("update-banner")) return;
+        const banner = document.createElement("div");
+        banner.id = "update-banner";
+        banner.innerHTML = `
+            <div class="update-banner-content">
+                <span class="update-icon">🔄</span>
+                <span class="update-text">
+                    Có bản cập nhật mới <strong>(${esc(info.local)} → ${esc(info.remote)})</strong>
+                </span>
+                <button id="btn-apply-update" class="btn sm primary" onclick="applyUpdate()">Cập nhật ngay</button>
+                <button class="btn sm" onclick="this.parentElement.parentElement.remove()">Bỏ qua</button>
+            </div>
+        `;
+        document.body.prepend(banner);
+    }
+
+    setTimeout(poll, 3000);
+})();
+
+async function applyUpdate() {
+    const btn = $("btn-apply-update");
+    if (btn) { btn.disabled = true; btn.textContent = "Đang cập nhật..."; }
+    try {
+        const r = await fetch("/api/apply-update", { method: "POST" });
+        const d = await r.json();
+        if (!r.ok || !d.ok) {
+            log(`[update] Lỗi cập nhật: ${d.error || "unknown"}`, "err");
+            if (btn) { btn.disabled = false; btn.textContent = "Thử lại"; }
+            return;
+        }
+        log(`[update] ${d.message}`, "ok");
+        const banner = $("update-banner");
+        if (banner) {
+            banner.innerHTML = `
+                <div class="update-banner-content update-success">
+                    <span class="update-icon">✅</span>
+                    <span class="update-text">Đã cập nhật thành công! Vui lòng đóng và mở lại app.</span>
+                    <button class="btn sm" onclick="this.parentElement.parentElement.remove()">Đóng</button>
+                </div>
+            `;
+        }
+    } catch (e) {
+        log(`[update] Lỗi kết nối: ${e.message || e}`, "err");
+        if (btn) { btn.disabled = false; btn.textContent = "Thử lại"; }
+    }
+}
+

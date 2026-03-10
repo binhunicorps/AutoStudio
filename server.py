@@ -2627,6 +2627,74 @@ def _run_queue():
         "current_topic": "",
     })
 
+# ── Auto-update check ────────────────────────────────────────────────────────
+_update_cache: dict = {"checked": False, "has_update": False, "local": "", "remote": "", "error": ""}
+
+
+def _git(*args: str, timeout: int = 15) -> tuple[str, int]:
+    """Run a git command and return (stdout, returncode)."""
+    try:
+        r = subprocess.run(
+            ["git"] + list(args),
+            cwd=BASE_DIR,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=timeout,
+        )
+        return r.stdout.strip(), r.returncode
+    except Exception as e:
+        return str(e), -1
+
+
+def _check_for_updates():
+    """Background check: compare local HEAD with remote."""
+    git_dir = os.path.join(BASE_DIR, ".git")
+    if not os.path.isdir(git_dir):
+        _update_cache.update(checked=True, error="not a git repo")
+        return
+    # Fetch latest from remote
+    _, rc = _git("fetch", "origin", timeout=20)
+    if rc != 0:
+        _update_cache.update(checked=True, error="fetch failed")
+        return
+    local_hash, _ = _git("rev-parse", "HEAD")
+    remote_hash, _ = _git("rev-parse", "@{u}")
+    has_update = bool(local_hash and remote_hash and local_hash != remote_hash)
+    summary = ""
+    if has_update:
+        summary, _ = _git("log", "--oneline", f"{local_hash}..{remote_hash}")
+    _update_cache.update(
+        checked=True, has_update=has_update,
+        local=local_hash[:8] if local_hash else "",
+        remote=remote_hash[:8] if remote_hash else "",
+        summary=summary,
+        error="",
+    )
+    if has_update:
+        _broadcast_log(f"[update] Có bản cập nhật mới ({local_hash[:8]} → {remote_hash[:8]})")
+
+
+@app.route("/api/check-update", methods=["GET"])
+def api_check_update():
+    return jsonify(_update_cache)
+
+
+@app.route("/api/apply-update", methods=["POST"])
+def api_apply_update():
+    git_dir = os.path.join(BASE_DIR, ".git")
+    if not os.path.isdir(git_dir):
+        return jsonify({"ok": False, "error": "Không phải git repo"}), 400
+    out, rc = _git("pull", "--ff-only", "origin", "main", timeout=60)
+    if rc != 0:
+        return jsonify({"ok": False, "error": out or f"git pull failed (exit={rc})"}), 500
+    # Invalidate dep cache
+    deps_ok = os.path.join(BASE_DIR, "runtime", "python", ".deps_ok")
+    if os.path.isfile(deps_ok):
+        os.remove(deps_ok)
+    _update_cache.update(checked=True, has_update=False)
+    _broadcast_log(f"[update] Đã cập nhật thành công! Vui lòng khởi động lại app.")
+    return jsonify({"ok": True, "output": out, "message": "Đã cập nhật. Vui lòng khởi động lại app."})
+
+
 def _startup_model_check():
     time.sleep(2)
     cfg = _load_config()
@@ -2649,8 +2717,10 @@ def _startup_model_check():
 
 if __name__ == "__main__":
     threading.Thread(target=_startup_model_check, daemon=True).start()
+    threading.Thread(target=_check_for_updates, daemon=True).start()
     print("\n  +--------------------------------------+")
     print("  |  Auto Studio — AI Video Studio    |")
     print("  |  http://localhost:5000               |")
     print("  +--------------------------------------+\n")
     app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
+

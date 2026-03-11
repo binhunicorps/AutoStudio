@@ -269,27 +269,17 @@
                     <h2 class="panel-title">Gửi File P2P</h2>
 
                     <div class="p2p-card">
-                        <div class="p2p-card-head">Nhan File Qua Internet (WebRTC)</div>
+                        <div class="p2p-card-head">Nhận File Qua Internet (WebRTC)</div>
                         <div class="input-group">
                             <input id="p2p-peer-input" class="inp" type="text"
-                                placeholder="Nhap Peer ID cua nguoi gui...">
-                            <button class="btn sm primary" onclick="webrtcConnect()">Ket noi</button>
+                                placeholder="Nhập Peer ID của người gửi...">
+                            <button class="btn sm primary" onclick="webrtcConnect()">Kết nối</button>
                         </div>
-                        <div id="p2p-webrtc-status" class="muted p2p-meta">Nhap Peer ID de ket noi va tai file truc tiep.</div>
+                        <div id="p2p-webrtc-status" class="muted p2p-meta">Nhập Peer ID để kết nối và tải file trực tiếp.</div>
                         <div id="p2p-webrtc-progress" class="hidden" style="margin-top:8px">
                             <div class="pbar"><div class="pfill" id="p2p-webrtc-pfill"></div></div>
                             <div class="ptext" id="p2p-webrtc-ptext">0%</div>
                         </div>
-                    </div>
-
-                    <div class="p2p-card">
-                        <div class="p2p-card-head">Nhan File Theo Token (LAN)</div>
-                        <div class="input-group">
-                            <input id="p2p-token-input" class="inp" type="text" maxlength="6"
-                                placeholder="Nhap token 6 chu cai...">
-                            <button class="btn sm primary" onclick="downloadP2PByToken()">Tai ve</button>
-                        </div>
-                        <div id="p2p-token-info" class="muted p2p-meta">Nhap token de tai file (chi hoat dong cung mang LAN).</div>
                     </div>
 
                     <div class="p2p-card">
@@ -309,19 +299,19 @@
                         </div>
                         <div id="p2p-picked-summary" class="muted p2p-meta">Chưa chọn file nào.</div>
                         <div id="p2p-picked-files" class="p2p-picked-files"></div>
-                        <button id="btn-p2p-create" class="btn primary" onclick="p2pCreateShare()" disabled>Tạo
+                        <button id="btn-p2p-create" class="btn primary" onclick="p2pCreateShare()" disabled style="margin-top:10px;width:100%">Tạo
                             Token</button>
                         <div id="p2p-new-token-wrap" class="p2p-token-wrap hidden">
                             <span>Token:</span>
                             <code id="p2p-new-token">------</code>
                             <button class="btn sm" onclick="copyP2PToken()">Copy</button>
-                            <button class="btn sm primary" onclick="webrtcStartSharing()" id="btn-p2p-webrtc-share">Chia se qua Internet</button>
+                            <button class="btn sm primary" onclick="webrtcStartSharing()" id="btn-p2p-webrtc-share">Chia sẻ qua Internet</button>
                         </div>
                         <div id="p2p-peer-id-wrap" class="p2p-token-wrap hidden" style="margin-top:6px">
                             <span>Peer ID:</span>
                             <code id="p2p-peer-id">---</code>
                             <button class="btn sm" onclick="copyP2PPeerId()">Copy</button>
-                            <span id="p2p-peer-status" class="muted" style="font-size:11px">Dang ket noi...</span>
+                            <span id="p2p-peer-status" class="muted" style="font-size:11px">Đang kết nối...</span>
                         </div>
                     </div>
                 </div>

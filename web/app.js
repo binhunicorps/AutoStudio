@@ -240,18 +240,6 @@ document.addEventListener("DOMContentLoaded", () => {
     if (stylePromptEl) {
         stylePromptEl.addEventListener("input", onStylePromptInput);
     }
-    const p2pTokenInput = $("p2p-token-input");
-    if (p2pTokenInput) {
-        p2pTokenInput.addEventListener("input", () => {
-            p2pTokenInput.value = sanitizeP2PToken(p2pTokenInput.value);
-        });
-        p2pTokenInput.addEventListener("keydown", (ev) => {
-            if (ev.key === "Enter") {
-                ev.preventDefault();
-                downloadP2PByToken();
-            }
-        });
-    }
     initP2PDropzone();
     renderP2PPickedFiles();
     updateP2PComposeMode();
@@ -2448,53 +2436,7 @@ async function p2pDeleteShare(token) {
     }
 }
 
-async function downloadP2PByToken() {
-    const tokenInput = $("p2p-token-input");
-    const infoEl = $("p2p-token-info");
-    if (!tokenInput || !infoEl) return;
-    const token = sanitizeP2PToken(tokenInput.value);
-    tokenInput.value = token;
-    if (token.length !== 6) {
-        infoEl.textContent = "Token phải gồm 6 chữ cái.";
-        log("[p2p] Token không hợp lệ", "warn");
-        return;
-    }
-    infoEl.textContent = `Đang tải token ${token} vào thư mục P2P...`;
-    try {
-        const r = await fetch(`/api/p2p/download/${encodeURIComponent(token)}`, { method: "POST" });
-        const d = await r.json();
-        if (!r.ok || d.error) {
-            infoEl.textContent = d.error || `HTTP ${r.status}`;
-            log(`[p2p] Không thể tải token ${token}: ${d.error || `HTTP ${r.status}`}`, "err");
-            return;
-        }
-        const s = d.share || {};
-        const savedDir = d.saved_dir || s.last_download_dir || "";
-        infoEl.textContent = `Token ${token} | ${d.file_count || s.file_count || 0} file | đã lưu vào: ${savedDir || "-"}`;
-        S.p2p.selectedToken = token;
-        await loadP2PShares(token);
-        log(`[p2p] Đã tải token ${token} vào ${savedDir || "thư mục P2P"}`, "ok");
-    } catch (e) {
-        infoEl.textContent = e.message || String(e);
-        log(`[p2p] Lỗi tải theo token ${token}: ${e.message || e}`, "err");
-    }
-}
 
-async function openP2PDownloadFolder(token) {
-    const t = sanitizeP2PToken(token);
-    if (!t) return;
-    try {
-        const r = await fetch(`/api/p2p/shares/${encodeURIComponent(t)}/open-download-folder`, { method: "POST" });
-        const d = await r.json();
-        if (!r.ok || d.error) {
-            log(`[p2p] Không thể mở thư mục token ${t}: ${d.error || `HTTP ${r.status}`}`, "err");
-            return;
-        }
-        log(`[p2p] Đã mở thư mục tải của token ${t}`, "ok");
-    } catch (e) {
-        log(`[p2p] Lỗi mở thư mục token ${t}: ${e.message || e}`, "err");
-    }
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // WebRTC P2P File Transfer (via PeerJS)
@@ -2726,21 +2668,51 @@ async function _webrtcReceiveMeta(conn, meta) {
     }
 }
 
+// Buffered chunk writer — serializes saves to avoid overwhelming Flask
+const _chunkQueue = [];
+let _chunkWriting = false;
+
 async function _webrtcReceiveChunk(msg) {
     const chunk = new Uint8Array(msg.data);
     _webrtcFileState.received += chunk.length;
     _webrtcFileState.receivedTotal += chunk.length;
     _webrtcUpdateProgress();
 
-    // Save chunk to server
-    try {
-        await fetch(`/api/p2p/save-chunk?session=${encodeURIComponent(_webrtc.sessionId)}&rel_path=${encodeURIComponent(msg.rel_path)}&offset=${msg.offset}`, {
-            method: "POST",
-            body: chunk,
-        });
-    } catch (e) {
-        log(`[p2p][webrtc] Loi luu chunk: ${e.message}`, "err");
+    // Add to queue
+    _chunkQueue.push({ rel_path: msg.rel_path, offset: msg.offset, data: chunk });
+    _processChunkQueue();
+}
+
+async function _processChunkQueue() {
+    if (_chunkWriting || _chunkQueue.length === 0) return;
+    _chunkWriting = true;
+    while (_chunkQueue.length > 0) {
+        // Merge consecutive chunks for same file into larger batches (up to 256KB)
+        const first = _chunkQueue.shift();
+        let merged = first.data;
+        let endOffset = first.offset + first.data.length;
+        while (_chunkQueue.length > 0 && _chunkQueue[0].rel_path === first.rel_path && _chunkQueue[0].offset === endOffset && merged.length < 256 * 1024) {
+            const next = _chunkQueue.shift();
+            const combined = new Uint8Array(merged.length + next.data.length);
+            combined.set(merged);
+            combined.set(next.data, merged.length);
+            merged = combined;
+            endOffset += next.data.length;
+        }
+        // Send with retry
+        for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+                await fetch(`/api/p2p/save-chunk?session=${encodeURIComponent(_webrtc.sessionId)}&rel_path=${encodeURIComponent(first.rel_path)}&offset=${first.offset}`, {
+                    method: "POST", body: merged,
+                });
+                break;
+            } catch (e) {
+                if (attempt === 2) log(`[p2p][webrtc] Loi luu chunk (3 lan): ${e.message}`, "err");
+                else await new Promise(r => setTimeout(r, 200 * (attempt + 1)));
+            }
+        }
     }
+    _chunkWriting = false;
 }
 
 function _webrtcUpdateProgress() {

@@ -2780,19 +2780,23 @@ def _read_local_version() -> str:
 def _check_for_updates():
     """Background check: compare local VERSION with latest GitHub release."""
     local_ver = _read_local_version()
+    cfg = _load_config()
+    github_token = cfg.get("github_token", "").strip()
     try:
         import requests as _req
+        headers = {"Accept": "application/vnd.github.v3+json"}
+        if github_token:
+            headers["Authorization"] = f"token {github_token}"
+
         r = _req.get(
             f"https://api.github.com/repos/{_GITHUB_REPO}/releases/latest",
-            timeout=10,
-            headers={"Accept": "application/vnd.github.v3+json"},
+            timeout=10, headers=headers,
         )
         if r.status_code == 404:
             # No releases yet, try tags
             r2 = _req.get(
                 f"https://api.github.com/repos/{_GITHUB_REPO}/tags",
-                timeout=10,
-                headers={"Accept": "application/vnd.github.v3+json"},
+                timeout=10, headers=headers,
             )
             if r2.status_code == 200 and r2.json():
                 latest_tag = r2.json()[0].get("name", "")
@@ -2825,6 +2829,11 @@ def _check_for_updates():
 @app.route("/api/check-update", methods=["GET"])
 def api_check_update():
     return jsonify(_update_cache)
+
+
+@app.route("/api/version", methods=["GET"])
+def api_version():
+    return jsonify({"version": _read_local_version()})
 
 
 def _startup_model_check():

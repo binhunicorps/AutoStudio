@@ -223,6 +223,7 @@ document.addEventListener("DOMContentLoaded", () => {
     reorderSidebarNav();
     loadConfig();
     loadStyles();
+    loadVersion();
     connectSSE();
     setupNav();
     const scriptEl = $("script-output");
@@ -482,6 +483,15 @@ function refreshGuide() {
 // ═══════════════════════════════════════════════════════════════════════════
 // Config
 // ═══════════════════════════════════════════════════════════════════════════
+async function loadVersion() {
+    try {
+        const r = await fetch("/api/version");
+        const d = await r.json();
+        const el = $("sidebar-version");
+        if (el && d.version) el.textContent = `v${d.version} @hvbinh73`;
+    } catch (_) {}
+}
+
 async function loadConfig() {
     try {
         const r = await fetch("/api/config");

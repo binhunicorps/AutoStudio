@@ -2471,6 +2471,138 @@ def p2p_download_token(token):
         "share": summary,
     })
 
+
+# ── WebRTC P2P helper endpoints ──────────────────────────────────────────────
+
+@app.route("/api/p2p/share-meta/<token>", methods=["GET"])
+def p2p_share_meta(token):
+    """Return file list + metadata for a share (used by WebRTC receiver to know what to request)."""
+    with _p2p_lock:
+        share = _find_p2p_share_locked(token)
+        if not share:
+            return jsonify({"error": "Token not found"}), 404
+        files_out = []
+        for item in share.get("files", []):
+            p = item.get("path", "")
+            if os.path.isfile(p):
+                files_out.append({
+                    "name": item.get("name", os.path.basename(p)),
+                    "rel_path": item.get("rel_path", item.get("name", os.path.basename(p))),
+                    "size": os.path.getsize(p),
+                })
+        return jsonify({
+            "token": share.get("token", ""),
+            "name": share.get("name", ""),
+            "files": files_out,
+            "total_size": sum(f["size"] for f in files_out),
+        })
+
+
+@app.route("/api/p2p/stream-file", methods=["GET"])
+def p2p_stream_file():
+    """Stream a file from sender's disk to browser (for WebRTC sender to read and send via DataChannel)."""
+    token = request.args.get("token", "").strip().upper()
+    rel_path = request.args.get("rel_path", "").strip()
+    if not token or not rel_path:
+        return jsonify({"error": "Missing token or rel_path"}), 400
+
+    with _p2p_lock:
+        share = _find_p2p_share_locked(token)
+        if not share:
+            return jsonify({"error": "Token not found"}), 404
+        target_file = None
+        for item in share.get("files", []):
+            item_rel = item.get("rel_path", item.get("name", ""))
+            if item_rel == rel_path and os.path.isfile(item.get("path", "")):
+                target_file = item["path"]
+                break
+        if not target_file:
+            return jsonify({"error": "File not found"}), 404
+
+    file_size = os.path.getsize(target_file)
+    CHUNK = 64 * 1024  # 64KB
+
+    def generate():
+        with open(target_file, "rb") as f:
+            while True:
+                chunk = f.read(CHUNK)
+                if not chunk:
+                    break
+                yield chunk
+
+    return app.response_class(
+        generate(),
+        mimetype="application/octet-stream",
+        headers={
+            "Content-Length": str(file_size),
+            "Content-Disposition": f'attachment; filename="{os.path.basename(target_file)}"',
+            "X-File-Size": str(file_size),
+        },
+    )
+
+
+_webrtc_uploads: dict = {}  # session_id -> {dir, files}
+
+@app.route("/api/p2p/save-chunk", methods=["POST"])
+def p2p_save_chunk():
+    """Save a chunk received via WebRTC to local disk (called by receiver's browser)."""
+    session_id = request.args.get("session", "")
+    rel_path = request.args.get("rel_path", "")
+    offset = int(request.args.get("offset", "0"))
+    if not session_id or not rel_path:
+        return jsonify({"error": "Missing session or rel_path"}), 400
+
+    cfg = _load_config()
+    download_root = os.path.abspath(_get_p2p_download_dir(cfg))
+
+    if session_id not in _webrtc_uploads:
+        session_dir = _unique_dir_path(download_root, f"webrtc_{session_id[:8]}")
+        os.makedirs(session_dir, exist_ok=True)
+        _webrtc_uploads[session_id] = {"dir": session_dir, "files": set()}
+
+    info = _webrtc_uploads[session_id]
+    safe_rel = rel_path.replace("\\", "/").lstrip("/")
+    target = os.path.abspath(os.path.join(info["dir"], safe_rel.replace("/", os.sep)))
+    if not _path_is_within_dir(target, info["dir"]):
+        return jsonify({"error": "Invalid path"}), 400
+
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    chunk_data = request.get_data()
+    mode = "r+b" if os.path.isfile(target) else "wb"
+    with open(target, mode) as f:
+        f.seek(offset)
+        f.write(chunk_data)
+    info["files"].add(safe_rel)
+
+    return jsonify({"ok": True, "written": len(chunk_data)})
+
+
+@app.route("/api/p2p/save-done", methods=["POST"])
+def p2p_save_done():
+    """Finalize WebRTC download session — rename temp dir to final name."""
+    data = request.get_json(force=True) or {}
+    session_id = data.get("session", "")
+    share_name = data.get("name", "webrtc_download")
+    if session_id not in _webrtc_uploads:
+        return jsonify({"error": "Session not found"}), 404
+
+    info = _webrtc_uploads.pop(session_id)
+    cfg = _load_config()
+    download_root = os.path.abspath(_get_p2p_download_dir(cfg))
+    safe_name = _safe_dir_name(share_name, "download")
+    final_dir = os.path.join(download_root, safe_name)
+    if os.path.exists(final_dir):
+        final_dir = _unique_dir_path(download_root, safe_name)
+
+    try:
+        shutil.move(info["dir"], final_dir)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    file_count = len(info["files"])
+    _broadcast_log(f"[p2p][webrtc] download done: {file_count} files -> {final_dir}")
+    return jsonify({"ok": True, "saved_dir": final_dir, "file_count": file_count})
+
 @app.route("/api/queue", methods=["GET"])
 def get_queue():
     with _queue_lock:

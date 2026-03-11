@@ -19,6 +19,7 @@
     <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png?v=20260308">
     <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png?v=20260308">
     <link rel="stylesheet" href="style.css">
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 </head>
 
 <body>
@@ -268,13 +269,27 @@
                     <h2 class="panel-title">Gửi File P2P</h2>
 
                     <div class="p2p-card">
-                        <div class="p2p-card-head">Nhận File Theo Token</div>
+                        <div class="p2p-card-head">Nhan File Qua Internet (WebRTC)</div>
+                        <div class="input-group">
+                            <input id="p2p-peer-input" class="inp" type="text"
+                                placeholder="Nhap Peer ID cua nguoi gui...">
+                            <button class="btn sm primary" onclick="webrtcConnect()">Ket noi</button>
+                        </div>
+                        <div id="p2p-webrtc-status" class="muted p2p-meta">Nhap Peer ID de ket noi va tai file truc tiep.</div>
+                        <div id="p2p-webrtc-progress" class="hidden" style="margin-top:8px">
+                            <div class="pbar"><div class="pfill" id="p2p-webrtc-pfill"></div></div>
+                            <div class="ptext" id="p2p-webrtc-ptext">0%</div>
+                        </div>
+                    </div>
+
+                    <div class="p2p-card">
+                        <div class="p2p-card-head">Nhan File Theo Token (LAN)</div>
                         <div class="input-group">
                             <input id="p2p-token-input" class="inp" type="text" maxlength="6"
-                                placeholder="Nhập token 6 chữ cái...">
-                            <button class="btn sm primary" onclick="downloadP2PByToken()">Tải về</button>
+                                placeholder="Nhap token 6 chu cai...">
+                            <button class="btn sm primary" onclick="downloadP2PByToken()">Tai ve</button>
                         </div>
-                        <div id="p2p-token-info" class="muted p2p-meta">Nhập token để tải file từ người gửi.</div>
+                        <div id="p2p-token-info" class="muted p2p-meta">Nhap token de tai file (chi hoat dong cung mang LAN).</div>
                     </div>
 
                     <div class="p2p-card">
@@ -300,6 +315,13 @@
                             <span>Token:</span>
                             <code id="p2p-new-token">------</code>
                             <button class="btn sm" onclick="copyP2PToken()">Copy</button>
+                            <button class="btn sm primary" onclick="webrtcStartSharing()" id="btn-p2p-webrtc-share">Chia se qua Internet</button>
+                        </div>
+                        <div id="p2p-peer-id-wrap" class="p2p-token-wrap hidden" style="margin-top:6px">
+                            <span>Peer ID:</span>
+                            <code id="p2p-peer-id">---</code>
+                            <button class="btn sm" onclick="copyP2PPeerId()">Copy</button>
+                            <span id="p2p-peer-status" class="muted" style="font-size:11px">Dang ket noi...</span>
                         </div>
                     </div>
                 </div>

@@ -2487,6 +2487,288 @@ async function openP2PDownloadFolder(token) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// WebRTC P2P File Transfer (via PeerJS)
+// ═══════════════════════════════════════════════════════════════════════════
+const _webrtc = { peer: null, conn: null, token: "", sending: false, sessionId: "" };
+const CHUNK_SIZE = 60 * 1024; // 60KB per DataChannel message (safe under 64KB limit)
+
+function _genSessionId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+function _fmtSize(b) {
+    if (b < 1024) return b + " B";
+    if (b < 1024*1024) return (b/1024).toFixed(1) + " KB";
+    if (b < 1024*1024*1024) return (b/1024/1024).toFixed(1) + " MB";
+    return (b/1024/1024/1024).toFixed(2) + " GB";
+}
+function _fmtSpeed(bps) {
+    if (bps < 1024) return bps.toFixed(0) + " B/s";
+    if (bps < 1024*1024) return (bps/1024).toFixed(1) + " KB/s";
+    return (bps/1024/1024).toFixed(1) + " MB/s";
+}
+
+// ── Sender: share token via WebRTC ──
+async function webrtcStartSharing() {
+    const tokenEl = $("p2p-new-token");
+    if (!tokenEl) return;
+    const token = tokenEl.textContent.trim();
+    if (!token || token === "------") { log("[p2p] Tao token truoc khi chia se", "warn"); return; }
+
+    _webrtc.token = token;
+    const peerWrap = $("p2p-peer-id-wrap");
+    const peerIdEl = $("p2p-peer-id");
+    const statusEl = $("p2p-peer-status");
+    if (peerWrap) peerWrap.classList.remove("hidden");
+    if (statusEl) statusEl.textContent = "Dang ket noi PeerJS...";
+
+    try {
+        if (_webrtc.peer) _webrtc.peer.destroy();
+        const peerId = "AS-" + token + "-" + Math.random().toString(36).slice(2, 6).toUpperCase();
+        _webrtc.peer = new Peer(peerId, {
+            config: { iceServers: [
+                { urls: "stun:stun.l.google.com:19302" },
+                { urls: "stun:stun1.l.google.com:19302" },
+            ]},
+        });
+
+        _webrtc.peer.on("open", (id) => {
+            if (peerIdEl) peerIdEl.textContent = id;
+            if (statusEl) statusEl.textContent = "San sang. Gui Peer ID cho nguoi nhan.";
+            log(`[p2p][webrtc] Peer ID: ${id} - san sang nhan ket noi`, "ok");
+        });
+
+        _webrtc.peer.on("connection", (conn) => {
+            log(`[p2p][webrtc] Co nguoi ket noi: ${conn.peer}`);
+            conn.on("open", () => {
+                conn.on("data", async (msg) => {
+                    if (msg.type === "request-meta") {
+                        // Send file list to receiver
+                        try {
+                            const r = await fetch(`/api/p2p/share-meta/${encodeURIComponent(_webrtc.token)}`);
+                            const meta = await r.json();
+                            conn.send({ type: "meta", data: meta });
+                        } catch (e) {
+                            conn.send({ type: "error", message: "Cannot read file metadata" });
+                        }
+                    } else if (msg.type === "request-file") {
+                        // Stream file to receiver
+                        await _webrtcSendFile(conn, _webrtc.token, msg.rel_path, msg.size || 0);
+                    }
+                });
+            });
+        });
+
+        _webrtc.peer.on("error", (err) => {
+            if (statusEl) statusEl.textContent = "Loi: " + err.type;
+            log(`[p2p][webrtc] Loi peer: ${err.type} - ${err.message}`, "err");
+        });
+    } catch (e) {
+        log(`[p2p][webrtc] Loi khoi tao: ${e.message}`, "err");
+    }
+}
+
+async function _webrtcSendFile(conn, token, relPath, totalSize) {
+    log(`[p2p][webrtc] Dang gui: ${relPath} (${_fmtSize(totalSize)})`);
+    try {
+        const url = `/api/p2p/stream-file?token=${encodeURIComponent(token)}&rel_path=${encodeURIComponent(relPath)}`;
+        const response = await fetch(url);
+        if (!response.ok) { conn.send({ type: "file-error", rel_path: relPath, error: `HTTP ${response.status}` }); return; }
+
+        const reader = response.body.getReader();
+        let offset = 0;
+        conn.send({ type: "file-start", rel_path: relPath, size: totalSize });
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            // Split into CHUNK_SIZE pieces for DataChannel
+            for (let i = 0; i < value.length; i += CHUNK_SIZE) {
+                const slice = value.slice(i, Math.min(i + CHUNK_SIZE, value.length));
+                // Wait if DataChannel buffer is getting full
+                while (conn.dataChannel && conn.dataChannel.bufferedAmount > 2 * 1024 * 1024) {
+                    await new Promise(r => setTimeout(r, 50));
+                }
+                conn.send({ type: "file-chunk", rel_path: relPath, offset: offset, data: Array.from(slice) });
+                offset += slice.length;
+            }
+        }
+        conn.send({ type: "file-end", rel_path: relPath, total: offset });
+        log(`[p2p][webrtc] Da gui xong: ${relPath} (${_fmtSize(offset)})`, "ok");
+    } catch (e) {
+        conn.send({ type: "file-error", rel_path: relPath, error: e.message });
+        log(`[p2p][webrtc] Loi gui ${relPath}: ${e.message}`, "err");
+    }
+}
+
+function copyP2PPeerId() {
+    const el = $("p2p-peer-id");
+    if (el) { navigator.clipboard.writeText(el.textContent); log("[p2p] Da copy Peer ID"); }
+}
+
+// ── Receiver: connect to sender's Peer ID ──
+async function webrtcConnect() {
+    const input = $("p2p-peer-input");
+    const statusEl = $("p2p-webrtc-status");
+    if (!input) return;
+    const peerId = input.value.trim();
+    if (!peerId) { if (statusEl) statusEl.textContent = "Vui long nhap Peer ID."; return; }
+
+    if (statusEl) statusEl.textContent = "Dang ket noi...";
+    log(`[p2p][webrtc] Dang ket noi toi ${peerId}...`);
+
+    try {
+        if (_webrtc.peer) _webrtc.peer.destroy();
+        _webrtc.sessionId = _genSessionId();
+        _webrtc.peer = new Peer(undefined, {
+            config: { iceServers: [
+                { urls: "stun:stun.l.google.com:19302" },
+                { urls: "stun:stun1.l.google.com:19302" },
+            ]},
+        });
+
+        _webrtc.peer.on("open", () => {
+            const conn = _webrtc.peer.connect(peerId, { reliable: true });
+            _webrtc.conn = conn;
+
+            conn.on("open", () => {
+                if (statusEl) statusEl.textContent = "Da ket noi! Dang lay danh sach file...";
+                log("[p2p][webrtc] Da ket noi. Dang lay metadata...");
+                conn.send({ type: "request-meta" });
+            });
+
+            conn.on("data", async (msg) => {
+                if (msg.type === "meta") {
+                    await _webrtcReceiveMeta(conn, msg.data);
+                } else if (msg.type === "file-start") {
+                    _webrtcFileState.current = msg.rel_path;
+                    _webrtcFileState.size = msg.size;
+                    _webrtcFileState.received = 0;
+                    _webrtcFileState.startTime = Date.now();
+                } else if (msg.type === "file-chunk") {
+                    await _webrtcReceiveChunk(msg);
+                } else if (msg.type === "file-end") {
+                    _webrtcFileState.completedFiles++;
+                    _webrtcUpdateProgress();
+                    if (_webrtcFileState.completedFiles >= _webrtcFileState.totalFiles) {
+                        await _webrtcFinalize();
+                    }
+                } else if (msg.type === "file-error") {
+                    log(`[p2p][webrtc] Loi nhan file ${msg.rel_path}: ${msg.error}`, "err");
+                } else if (msg.type === "error") {
+                    if (statusEl) statusEl.textContent = "Loi: " + msg.message;
+                }
+            });
+
+            conn.on("close", () => {
+                if (statusEl && _webrtcFileState.completedFiles < _webrtcFileState.totalFiles) {
+                    statusEl.textContent = "Ket noi bi dong.";
+                }
+            });
+        });
+
+        _webrtc.peer.on("error", (err) => {
+            if (statusEl) statusEl.textContent = "Loi: " + err.type;
+            log(`[p2p][webrtc] Loi: ${err.type}`, "err");
+        });
+    } catch (e) {
+        if (statusEl) statusEl.textContent = "Loi: " + e.message;
+        log(`[p2p][webrtc] Loi ket noi: ${e.message}`, "err");
+    }
+}
+
+const _webrtcFileState = { totalFiles: 0, completedFiles: 0, totalSize: 0, receivedTotal: 0, current: "", size: 0, received: 0, startTime: 0, shareName: "" };
+
+async function _webrtcReceiveMeta(conn, meta) {
+    const statusEl = $("p2p-webrtc-status");
+    const files = meta.files || [];
+    if (!files.length) {
+        if (statusEl) statusEl.textContent = "Khong co file nao de tai.";
+        return;
+    }
+    _webrtcFileState.totalFiles = files.length;
+    _webrtcFileState.completedFiles = 0;
+    _webrtcFileState.totalSize = meta.total_size || 0;
+    _webrtcFileState.receivedTotal = 0;
+    _webrtcFileState.shareName = meta.name || "download";
+    if (statusEl) statusEl.textContent = `${files.length} file (${_fmtSize(meta.total_size)}) - dang tai...`;
+    const progressWrap = $("p2p-webrtc-progress");
+    if (progressWrap) progressWrap.classList.remove("hidden");
+
+    log(`[p2p][webrtc] Bat dau tai ${files.length} file (${_fmtSize(meta.total_size)})`);
+
+    // Request files one by one
+    for (const f of files) {
+        conn.send({ type: "request-file", rel_path: f.rel_path, size: f.size });
+        // Wait for file to complete before requesting next
+        await new Promise(resolve => {
+            const check = () => {
+                if (_webrtcFileState.completedFiles >= _webrtcFileState.completedFiles) {
+                    // Check every 200ms if current file is done
+                    const checkDone = setInterval(() => {
+                        if (_webrtcFileState.received >= _webrtcFileState.size || _webrtcFileState.current !== f.rel_path) {
+                            clearInterval(checkDone);
+                            resolve();
+                        }
+                    }, 200);
+                }
+            };
+            check();
+        });
+    }
+}
+
+async function _webrtcReceiveChunk(msg) {
+    const chunk = new Uint8Array(msg.data);
+    _webrtcFileState.received += chunk.length;
+    _webrtcFileState.receivedTotal += chunk.length;
+    _webrtcUpdateProgress();
+
+    // Save chunk to server
+    try {
+        await fetch(`/api/p2p/save-chunk?session=${encodeURIComponent(_webrtc.sessionId)}&rel_path=${encodeURIComponent(msg.rel_path)}&offset=${msg.offset}`, {
+            method: "POST",
+            body: chunk,
+        });
+    } catch (e) {
+        log(`[p2p][webrtc] Loi luu chunk: ${e.message}`, "err");
+    }
+}
+
+function _webrtcUpdateProgress() {
+    const pfill = $("p2p-webrtc-pfill");
+    const ptext = $("p2p-webrtc-ptext");
+    const statusEl = $("p2p-webrtc-status");
+    const pct = _webrtcFileState.totalSize > 0 ? Math.min(100, (_webrtcFileState.receivedTotal / _webrtcFileState.totalSize * 100)) : 0;
+    if (pfill) pfill.style.width = pct.toFixed(1) + "%";
+
+    const elapsed = (Date.now() - _webrtcFileState.startTime) / 1000;
+    const speed = elapsed > 0 ? _webrtcFileState.receivedTotal / elapsed : 0;
+
+    if (ptext) ptext.textContent = `${pct.toFixed(1)}% | ${_fmtSize(_webrtcFileState.receivedTotal)} / ${_fmtSize(_webrtcFileState.totalSize)} | ${_fmtSpeed(speed)}`;
+    if (statusEl) statusEl.textContent = `File ${_webrtcFileState.completedFiles + 1}/${_webrtcFileState.totalFiles}: ${_webrtcFileState.current || "..."} | ${_fmtSpeed(speed)}`;
+}
+
+async function _webrtcFinalize() {
+    const statusEl = $("p2p-webrtc-status");
+    try {
+        const r = await fetch("/api/p2p/save-done", {
+            method: "POST",
+            headers: CT_JSON,
+            body: JSON.stringify({ session: _webrtc.sessionId, name: _webrtcFileState.shareName }),
+        });
+        const d = await r.json();
+        if (d.ok) {
+            if (statusEl) statusEl.textContent = `Hoan tat! ${d.file_count} file da luu vao ${d.saved_dir}`;
+            log(`[p2p][webrtc] Hoan tat! ${d.file_count} file -> ${d.saved_dir}`, "ok");
+        } else {
+            if (statusEl) statusEl.textContent = "Loi luu file: " + (d.error || "");
+        }
+    } catch (e) {
+        if (statusEl) statusEl.textContent = "Loi: " + e.message;
+    }
+    if (_webrtc.peer) { _webrtc.peer.destroy(); _webrtc.peer = null; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Utils
 // ═══════════════════════════════════════════════════════════════════════════
 const CT_JSON = { "Content-Type": "application/json; charset=utf-8" };

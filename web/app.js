@@ -2877,7 +2877,7 @@ function log(msg, cls = "", time = null) {
 function clearLog() { $("log-body").innerHTML = ""; }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Auto-Update Check
+// Auto-Update Check (via GitHub API)
 // ═══════════════════════════════════════════════════════════════════════════
 (function autoCheckUpdate() {
     let attempts = 0;
@@ -2900,14 +2900,15 @@ function clearLog() { $("log-body").innerHTML = ""; }
         if ($("update-banner")) return;
         const banner = document.createElement("div");
         banner.id = "update-banner";
+        const dlUrl = info.download_url || `https://github.com/binhunicorps/AutoStudio/releases`;
         banner.innerHTML = `
             <div class="update-banner-content">
                 <span class="update-icon">🔄</span>
                 <span class="update-text">
-                    Có bản cập nhật mới <strong>(${esc(info.local)} → ${esc(info.remote)})</strong>
+                    Co ban cap nhat moi: <strong>v${esc(info.local)}</strong> &rarr; <strong>v${esc(info.remote)}</strong>
                 </span>
-                <button id="btn-apply-update" class="btn sm primary" onclick="applyUpdate()">Cập nhật ngay</button>
-                <button class="btn sm" onclick="this.parentElement.parentElement.remove()">Bỏ qua</button>
+                <a href="${esc(dlUrl)}" target="_blank" class="btn sm primary" style="text-decoration:none">Tai ban moi</a>
+                <button class="btn sm" onclick="this.parentElement.parentElement.remove()">Bo qua</button>
             </div>
         `;
         document.body.prepend(banner);
@@ -2915,32 +2916,3 @@ function clearLog() { $("log-body").innerHTML = ""; }
 
     setTimeout(poll, 3000);
 })();
-
-async function applyUpdate() {
-    const btn = $("btn-apply-update");
-    if (btn) { btn.disabled = true; btn.textContent = "Đang cập nhật..."; }
-    try {
-        const r = await fetch("/api/apply-update", { method: "POST" });
-        const d = await r.json();
-        if (!r.ok || !d.ok) {
-            log(`[update] Lỗi cập nhật: ${d.error || "unknown"}`, "err");
-            if (btn) { btn.disabled = false; btn.textContent = "Thử lại"; }
-            return;
-        }
-        log(`[update] ${d.message}`, "ok");
-        const banner = $("update-banner");
-        if (banner) {
-            banner.innerHTML = `
-                <div class="update-banner-content update-success">
-                    <span class="update-icon">✅</span>
-                    <span class="update-text">Đã cập nhật thành công! Vui lòng đóng và mở lại app.</span>
-                    <button class="btn sm" onclick="this.parentElement.parentElement.remove()">Đóng</button>
-                </div>
-            `;
-        }
-    } catch (e) {
-        log(`[update] Lỗi kết nối: ${e.message || e}`, "err");
-        if (btn) { btn.disabled = false; btn.textContent = "Thử lại"; }
-    }
-}
-

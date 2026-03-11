@@ -2631,72 +2631,68 @@ def _run_queue():
         "current_topic": "",
     })
 
-# ── Auto-update check ────────────────────────────────────────────────────────
-_update_cache: dict = {"checked": False, "has_update": False, "local": "", "remote": "", "error": ""}
+# ── Auto-update check via GitHub API (no Git required) ───────────────────────
+_GITHUB_REPO = "binhunicorps/AutoStudio"
+_VERSION_FILE = os.path.join(BASE_DIR, "VERSION")
+_update_cache: dict = {"checked": False, "has_update": False, "local": "", "remote": "", "download_url": "", "error": ""}
 
 
-def _git(*args: str, timeout: int = 15) -> tuple[str, int]:
-    """Run a git command and return (stdout, returncode)."""
+def _read_local_version() -> str:
     try:
-        r = subprocess.run(
-            ["git"] + list(args),
-            cwd=BASE_DIR,
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=timeout,
-        )
-        return r.stdout.strip(), r.returncode
-    except Exception as e:
-        return str(e), -1
+        with open(_VERSION_FILE, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except Exception:
+        return "0.0.0"
 
 
 def _check_for_updates():
-    """Background check: compare local HEAD with remote."""
-    git_dir = os.path.join(BASE_DIR, ".git")
-    if not os.path.isdir(git_dir):
-        _update_cache.update(checked=True, error="not a git repo")
-        return
-    # Fetch latest from remote
-    _, rc = _git("fetch", "origin", timeout=20)
-    if rc != 0:
-        _update_cache.update(checked=True, error="fetch failed")
-        return
-    local_hash, _ = _git("rev-parse", "HEAD")
-    remote_hash, _ = _git("rev-parse", "@{u}")
-    has_update = bool(local_hash and remote_hash and local_hash != remote_hash)
-    summary = ""
-    if has_update:
-        summary, _ = _git("log", "--oneline", f"{local_hash}..{remote_hash}")
-    _update_cache.update(
-        checked=True, has_update=has_update,
-        local=local_hash[:8] if local_hash else "",
-        remote=remote_hash[:8] if remote_hash else "",
-        summary=summary,
-        error="",
-    )
-    if has_update:
-        _broadcast_log(f"[update] Có bản cập nhật mới ({local_hash[:8]} → {remote_hash[:8]})")
+    """Background check: compare local VERSION with latest GitHub release."""
+    local_ver = _read_local_version()
+    try:
+        import requests as _req
+        r = _req.get(
+            f"https://api.github.com/repos/{_GITHUB_REPO}/releases/latest",
+            timeout=10,
+            headers={"Accept": "application/vnd.github.v3+json"},
+        )
+        if r.status_code == 404:
+            # No releases yet, try tags
+            r2 = _req.get(
+                f"https://api.github.com/repos/{_GITHUB_REPO}/tags",
+                timeout=10,
+                headers={"Accept": "application/vnd.github.v3+json"},
+            )
+            if r2.status_code == 200 and r2.json():
+                latest_tag = r2.json()[0].get("name", "")
+                remote_ver = latest_tag.lstrip("v")
+                download_url = f"https://github.com/{_GITHUB_REPO}/archive/refs/tags/{latest_tag}.zip"
+            else:
+                _update_cache.update(checked=True, error="no releases")
+                return
+        elif r.status_code == 200:
+            data = r.json()
+            remote_ver = data.get("tag_name", "").lstrip("v")
+            download_url = data.get("zipball_url", f"https://github.com/{_GITHUB_REPO}/archive/refs/heads/main.zip")
+        else:
+            _update_cache.update(checked=True, error=f"GitHub API {r.status_code}")
+            return
+
+        has_update = remote_ver != local_ver and remote_ver > local_ver
+        _update_cache.update(
+            checked=True, has_update=has_update,
+            local=local_ver, remote=remote_ver,
+            download_url=download_url,
+            error="",
+        )
+        if has_update:
+            _broadcast_log(f"[update] Co ban cap nhat moi (v{local_ver} -> v{remote_ver})")
+    except Exception as e:
+        _update_cache.update(checked=True, error=str(e)[:100])
 
 
 @app.route("/api/check-update", methods=["GET"])
 def api_check_update():
     return jsonify(_update_cache)
-
-
-@app.route("/api/apply-update", methods=["POST"])
-def api_apply_update():
-    git_dir = os.path.join(BASE_DIR, ".git")
-    if not os.path.isdir(git_dir):
-        return jsonify({"ok": False, "error": "Không phải git repo"}), 400
-    out, rc = _git("pull", "--ff-only", "origin", "main", timeout=60)
-    if rc != 0:
-        return jsonify({"ok": False, "error": out or f"git pull failed (exit={rc})"}), 500
-    # Invalidate dep cache
-    deps_ok = os.path.join(BASE_DIR, "runtime", "python", ".deps_ok")
-    if os.path.isfile(deps_ok):
-        os.remove(deps_ok)
-    _update_cache.update(checked=True, has_update=False)
-    _broadcast_log(f"[update] Đã cập nhật thành công! Vui lòng khởi động lại app.")
-    return jsonify({"ok": True, "output": out, "message": "Đã cập nhật. Vui lòng khởi động lại app."})
 
 
 def _startup_model_check():

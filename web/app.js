@@ -2439,10 +2439,12 @@ async function p2pDeleteShare(token) {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// WebRTC P2P File Transfer (via PeerJS) — Binary Protocol
+// WebRTC P2P File Transfer — High-Speed Binary Protocol
 // ═══════════════════════════════════════════════════════════════════════════
 const _webrtc = { peer: null, conn: null, token: "", sessionId: "", paused: false, cancelled: false };
-const CHUNK_SIZE = 60 * 1024;
+const CHUNK_SIZE = 256 * 1024; // 256KB chunks for speed
+const BUFFER_HIGH = 8 * 1024 * 1024; // 8MB DataChannel buffer threshold
+const SAVE_BATCH = 1024 * 1024; // 1MB save batch to Flask
 
 function _genSessionId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 function _fmtSize(b) {
@@ -2456,53 +2458,66 @@ function _fmtSpeed(bps) {
     if (bps < 1024*1024) return (bps/1024).toFixed(1) + " KB/s";
     return (bps/1024/1024).toFixed(1) + " MB/s";
 }
-
 function _makePeerConfig() {
-    return {
-        config: { iceServers: [
-            { urls: "stun:stun.l.google.com:19302" },
-            { urls: "stun:stun1.l.google.com:19302" },
-        ]},
-    };
+    return { config: { iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" },
+    ]}};
 }
 
-// ── Sender ──
-async function webrtcStartSharing() {
-    const tokenEl = $("p2p-new-token");
-    if (!tokenEl) return;
-    const token = tokenEl.textContent.trim();
-    if (!token || token === "------") { log("[p2p] Tạo token trước khi chia sẻ", "warn"); return; }
+// ── Combined share + connect (sender) ──
+async function p2pShareAndConnect() {
+    const nameEl = $("p2p-share-name");
+    const shareName = nameEl ? nameEl.value.trim() : "";
+    if (!S.p2p.pickedFiles.length) { log("[p2p] Chưa chọn file", "warn"); return; }
 
-    _webrtc.token = token;
+    const btn = $("btn-p2p-create");
+    if (btn) { btn.disabled = true; btn.textContent = "Đang tạo..."; }
+    try {
+        const body = { name: shareName || undefined, files: S.p2p.pickedFiles.map(f => f.path) };
+        const r = await fetch("/api/p2p/shares", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const d = await r.json();
+        if (!r.ok || d.error) { log("[p2p] Lỗi tạo share: " + (d.error || ""), "err"); if (btn) { btn.disabled = false; btn.textContent = "Chia sẻ"; } return; }
+        _webrtc.token = d.share?.token || d.token || "";
+        log(`[p2p] Đã tạo share: ${_webrtc.token}`);
+        await loadP2PShares(_webrtc.token);
+    } catch (e) {
+        log("[p2p] Lỗi: " + e.message, "err");
+        if (btn) { btn.disabled = false; btn.textContent = "Chia sẻ"; }
+        return;
+    }
+
     _webrtc.cancelled = false;
     const peerWrap = $("p2p-peer-id-wrap");
     const peerIdEl = $("p2p-peer-id");
     const statusEl = $("p2p-peer-status");
     if (peerWrap) peerWrap.classList.remove("hidden");
-    if (statusEl) statusEl.textContent = "Đang kết nối PeerJS...";
+    if (statusEl) statusEl.textContent = "Đang kết nối...";
+    if (btn) btn.textContent = "Đang chia sẻ...";
 
     try {
         if (_webrtc.peer) _webrtc.peer.destroy();
-        const peerId = "AS-" + token + "-" + Math.random().toString(36).slice(2, 6).toUpperCase();
+        const peerId = "AS-" + Math.random().toString(36).slice(2, 8).toUpperCase();
         _webrtc.peer = new Peer(peerId, _makePeerConfig());
 
         _webrtc.peer.on("open", (id) => {
             if (peerIdEl) peerIdEl.textContent = id;
             if (statusEl) statusEl.textContent = "Sẵn sàng. Gửi Peer ID cho người nhận.";
-            log(`[p2p][webrtc] Peer ID: ${id} — sẵn sàng nhận kết nối`, "ok");
+            log(`[p2p][webrtc] Peer ID: ${id} — sẵn sàng`, "ok");
         });
 
         _webrtc.peer.on("connection", (conn) => {
             log(`[p2p][webrtc] Có người kết nối: ${conn.peer}`);
             _webrtc.conn = conn;
+            if (statusEl) statusEl.textContent = "Đang gửi file...";
             conn.on("open", () => {
                 conn.on("data", async (msg) => {
                     if (typeof msg === "object" && msg.type === "request-meta") {
                         try {
-                            const r = await fetch(`/api/p2p/share-meta/${encodeURIComponent(_webrtc.token)}`);
-                            const meta = await r.json();
+                            const r2 = await fetch(`/api/p2p/share-meta/${encodeURIComponent(_webrtc.token)}`);
+                            const meta = await r2.json();
                             conn.send({ type: "meta", data: meta });
-                        } catch (e) {
+                        } catch (e2) {
                             conn.send({ type: "error", message: "Không thể đọc metadata" });
                         }
                     } else if (typeof msg === "object" && msg.type === "request-file") {
@@ -2514,10 +2529,11 @@ async function webrtcStartSharing() {
 
         _webrtc.peer.on("error", (err) => {
             if (statusEl) statusEl.textContent = "Lỗi: " + err.type;
-            log(`[p2p][webrtc] Lỗi peer: ${err.type}`, "err");
+            log(`[p2p][webrtc] Lỗi: ${err.type}`, "err");
         });
     } catch (e) {
         log(`[p2p][webrtc] Lỗi khởi tạo: ${e.message}`, "err");
+        if (btn) { btn.disabled = false; btn.textContent = "Chia sẻ"; }
     }
 }
 
@@ -2528,42 +2544,27 @@ async function _webrtcSendFile(conn, token, relPath, totalSize) {
         const response = await fetch(url);
         if (!response.ok) { conn.send({ type: "file-error", rel_path: relPath, error: `HTTP ${response.status}` }); return; }
 
-        const reader = response.body.getReader();
-        let offset = 0;
         conn.send({ type: "file-start", rel_path: relPath, size: totalSize });
+        const reader = response.body.getReader();
 
         while (true) {
             if (_webrtc.cancelled) { conn.send({ type: "file-error", rel_path: relPath, error: "Cancelled" }); return; }
+            while (_webrtc.paused && !_webrtc.cancelled) await new Promise(r => setTimeout(r, 200));
             const { done, value } = await reader.read();
             if (done) break;
 
             for (let i = 0; i < value.length; i += CHUNK_SIZE) {
                 if (_webrtc.cancelled) return;
-                // Wait while paused
-                while (_webrtc.paused && !_webrtc.cancelled) {
-                    await new Promise(r => setTimeout(r, 200));
-                }
+                while (_webrtc.paused && !_webrtc.cancelled) await new Promise(r => setTimeout(r, 200));
                 const slice = value.slice(i, Math.min(i + CHUNK_SIZE, value.length));
-                // Wait if buffer is full
-                while (conn.dataChannel && conn.dataChannel.bufferedAmount > 2 * 1024 * 1024) {
-                    await new Promise(r => setTimeout(r, 50));
+                while (conn.dataChannel && conn.dataChannel.bufferedAmount > BUFFER_HIGH) {
+                    await new Promise(r => setTimeout(r, 20));
                 }
-                // Send binary: [4B offset LE][relPath bytes][data bytes]
-                const relPathBytes = new TextEncoder().encode(relPath);
-                const header = new ArrayBuffer(8);
-                const hView = new DataView(header);
-                hView.setUint32(0, offset, true);           // offset
-                hView.setUint32(4, relPathBytes.length, true); // relPath length
-                const packet = new Uint8Array(8 + relPathBytes.length + slice.length);
-                packet.set(new Uint8Array(header), 0);
-                packet.set(relPathBytes, 8);
-                packet.set(slice, 8 + relPathBytes.length);
-                conn.send(packet.buffer);
-                offset += slice.length;
+                conn.send(slice.buffer.byteLength === slice.length ? slice.buffer : slice.buffer.slice(slice.byteOffset, slice.byteOffset + slice.byteLength));
             }
         }
-        conn.send({ type: "file-end", rel_path: relPath, total: offset });
-        log(`[p2p][webrtc] Đã gửi xong: ${relPath} (${_fmtSize(offset)})`, "ok");
+        conn.send({ type: "file-end", rel_path: relPath, total: totalSize });
+        log(`[p2p][webrtc] Đã gửi xong: ${relPath} (${_fmtSize(totalSize)})`, "ok");
     } catch (e) {
         conn.send({ type: "file-error", rel_path: relPath, error: e.message });
         log(`[p2p][webrtc] Lỗi gửi ${relPath}: ${e.message}`, "err");
@@ -2585,10 +2586,10 @@ async function webrtcConnect() {
 
     _webrtc.paused = false;
     _webrtc.cancelled = false;
+    _webrtcFileState.receivedTotal = 0;
     if (statusEl) statusEl.textContent = "Đang kết nối...";
     log(`[p2p][webrtc] Đang kết nối tới ${peerId}...`);
 
-    // Show controls
     const ctrlWrap = $("p2p-webrtc-controls");
     if (ctrlWrap) { ctrlWrap.classList.remove("hidden"); ctrlWrap.style.display = "flex"; }
 
@@ -2603,14 +2604,14 @@ async function webrtcConnect() {
 
             conn.on("open", () => {
                 if (statusEl) statusEl.textContent = "Đã kết nối! Đang lấy danh sách file...";
-                log("[p2p][webrtc] Đã kết nối. Đang lấy metadata...");
                 conn.send({ type: "request-meta" });
             });
 
             conn.on("data", async (msg) => {
-                if (msg instanceof ArrayBuffer) {
-                    // Binary chunk
-                    await _webrtcReceiveBinaryChunk(msg);
+                const isBinary = msg instanceof ArrayBuffer || (ArrayBuffer.isView(msg) && !msg.type);
+                if (isBinary) {
+                    const data = msg instanceof ArrayBuffer ? new Uint8Array(msg) : (msg instanceof Uint8Array ? msg : new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength));
+                    _webrtcReceiveRawChunk(data);
                 } else if (typeof msg === "object") {
                     if (msg.type === "meta") {
                         await _webrtcReceiveMeta(conn, msg.data);
@@ -2618,17 +2619,17 @@ async function webrtcConnect() {
                         _webrtcFileState.current = msg.rel_path;
                         _webrtcFileState.size = msg.size;
                         _webrtcFileState.received = 0;
-                        _webrtcFileState.fileStartTime = Date.now();
+                        _chunkBuffer = { relPath: msg.rel_path, chunks: [], totalBytes: 0, offset: 0 };
                     } else if (msg.type === "file-end") {
+                        await _flushChunkBuffer();
                         _webrtcFileState.completedFiles++;
                         _webrtcUpdateProgress();
                         if (_webrtcFileState.completedFiles >= _webrtcFileState.totalFiles) {
-                            // Drain chunk queue then finalize
                             await _drainChunkQueue();
                             await _webrtcFinalize();
                         }
                     } else if (msg.type === "file-error") {
-                        log(`[p2p][webrtc] Lỗi nhận file ${msg.rel_path}: ${msg.error}`, "err");
+                        log(`[p2p][webrtc] Lỗi nhận ${msg.rel_path}: ${msg.error}`, "err");
                         _webrtcFileState.completedFiles++;
                     } else if (msg.type === "error") {
                         if (statusEl) statusEl.textContent = "Lỗi: " + msg.message;
@@ -2637,140 +2638,106 @@ async function webrtcConnect() {
             });
 
             conn.on("close", () => {
-                if (statusEl && _webrtcFileState.completedFiles < _webrtcFileState.totalFiles) {
+                if (statusEl && _webrtcFileState.completedFiles < _webrtcFileState.totalFiles)
                     statusEl.textContent = "Kết nối bị đóng.";
-                }
             });
         });
 
         _webrtc.peer.on("error", (err) => {
             if (statusEl) statusEl.textContent = "Lỗi: " + err.type;
-            log(`[p2p][webrtc] Lỗi: ${err.type}`, "err");
         });
     } catch (e) {
         if (statusEl) statusEl.textContent = "Lỗi: " + e.message;
-        log(`[p2p][webrtc] Lỗi kết nối: ${e.message}`, "err");
     }
 }
 
-// ── Receiver controls ──
+// ── Controls ──
 function webrtcPause() {
     _webrtc.paused = true;
     const btn = $("btn-webrtc-pause");
-    if (btn) btn.textContent = "▶ Tiếp tục";
-    btn.onclick = webrtcResume;
-    const statusEl = $("p2p-webrtc-status");
-    if (statusEl) statusEl.textContent = "Đã tạm dừng.";
-    log("[p2p][webrtc] Đã tạm dừng");
+    if (btn) { btn.textContent = "▶ Tiếp tục"; btn.onclick = webrtcResume; }
+    $("p2p-webrtc-status").textContent = "Đã tạm dừng.";
 }
 function webrtcResume() {
     _webrtc.paused = false;
     const btn = $("btn-webrtc-pause");
-    if (btn) btn.textContent = "⏸ Tạm dừng";
-    btn.onclick = webrtcPause;
-    log("[p2p][webrtc] Tiếp tục tải");
+    if (btn) { btn.textContent = "⏸ Tạm dừng"; btn.onclick = webrtcPause; }
 }
 function webrtcCancel() {
-    _webrtc.cancelled = true;
-    _webrtc.paused = false;
+    _webrtc.cancelled = true; _webrtc.paused = false;
     if (_webrtc.conn) try { _webrtc.conn.close(); } catch(_){}
     if (_webrtc.peer) { _webrtc.peer.destroy(); _webrtc.peer = null; }
-    const statusEl = $("p2p-webrtc-status");
-    if (statusEl) statusEl.textContent = "Đã huỷ.";
-    const ctrlWrap = $("p2p-webrtc-controls");
-    if (ctrlWrap) { ctrlWrap.classList.add("hidden"); ctrlWrap.style.display = "none"; }
-    log("[p2p][webrtc] Đã huỷ nhận file", "warn");
+    $("p2p-webrtc-status").textContent = "Đã huỷ.";
+    const cw = $("p2p-webrtc-controls");
+    if (cw) { cw.classList.add("hidden"); cw.style.display = "none"; }
 }
 
-// ── File state + receive logic ──
-const _webrtcFileState = { totalFiles: 0, completedFiles: 0, totalSize: 0, receivedTotal: 0, current: "", size: 0, received: 0, startTime: 0, fileStartTime: 0, shareName: "" };
+// ── File state + buffered receive ──
+const _webrtcFileState = { totalFiles: 0, completedFiles: 0, totalSize: 0, receivedTotal: 0, current: "", size: 0, received: 0, startTime: 0, shareName: "" };
+let _chunkBuffer = { relPath: "", chunks: [], totalBytes: 0, offset: 0 };
 
 async function _webrtcReceiveMeta(conn, meta) {
     const statusEl = $("p2p-webrtc-status");
     const files = meta.files || [];
-    if (!files.length) {
-        if (statusEl) statusEl.textContent = "Không có file nào để tải.";
-        return;
-    }
-    _webrtcFileState.totalFiles = files.length;
-    _webrtcFileState.completedFiles = 0;
-    _webrtcFileState.totalSize = meta.total_size || 0;
-    _webrtcFileState.receivedTotal = 0;
-    _webrtcFileState.startTime = Date.now();
-    _webrtcFileState.shareName = meta.name || "download";
+    if (!files.length) { if (statusEl) statusEl.textContent = "Không có file."; return; }
+    Object.assign(_webrtcFileState, { totalFiles: files.length, completedFiles: 0, totalSize: meta.total_size || 0, receivedTotal: 0, startTime: Date.now(), shareName: meta.name || "download" });
     if (statusEl) statusEl.textContent = `${files.length} file (${_fmtSize(meta.total_size)}) — đang tải...`;
-    const progressWrap = $("p2p-webrtc-progress");
-    if (progressWrap) progressWrap.classList.remove("hidden");
-
+    const pw = $("p2p-webrtc-progress"); if (pw) pw.classList.remove("hidden");
     log(`[p2p][webrtc] Bắt đầu tải ${files.length} file (${_fmtSize(meta.total_size)})`);
 
-    // Request files one by one
     for (const f of files) {
         if (_webrtc.cancelled) return;
         while (_webrtc.paused && !_webrtc.cancelled) await new Promise(r => setTimeout(r, 200));
-        _webrtcFileState.current = f.rel_path;
-        _webrtcFileState.received = 0;
-        _webrtcFileState.size = f.size;
+        Object.assign(_webrtcFileState, { current: f.rel_path, received: 0, size: f.size });
+        _chunkBuffer = { relPath: f.rel_path, chunks: [], totalBytes: 0, offset: 0 };
         conn.send({ type: "request-file", rel_path: f.rel_path, size: f.size });
-        // Wait for file-end
         await new Promise(resolve => {
             const iv = setInterval(() => {
-                if (_webrtc.cancelled || _webrtcFileState.completedFiles > (_webrtcFileState.totalFiles - files.length + files.indexOf(f))) {
-                    clearInterval(iv);
-                    resolve();
-                }
+                if (_webrtc.cancelled || _webrtcFileState.completedFiles > (_webrtcFileState.totalFiles - files.length + files.indexOf(f))) { clearInterval(iv); resolve(); }
             }, 200);
         });
     }
 }
 
-// Decode binary chunks: [4B offset LE][4B relPath len LE][relPath bytes][data bytes]
-async function _webrtcReceiveBinaryChunk(buffer) {
-    const view = new DataView(buffer);
-    const offset = view.getUint32(0, true);
-    const relPathLen = view.getUint32(4, true);
-    const relPathBytes = new Uint8Array(buffer, 8, relPathLen);
-    const relPath = new TextDecoder().decode(relPathBytes);
-    const chunkData = new Uint8Array(buffer, 8 + relPathLen);
-
-    _webrtcFileState.received += chunkData.length;
-    _webrtcFileState.receivedTotal += chunkData.length;
+function _webrtcReceiveRawChunk(data) {
+    _webrtcFileState.received += data.length;
+    _webrtcFileState.receivedTotal += data.length;
     _webrtcUpdateProgress();
+    _chunkBuffer.chunks.push(data);
+    _chunkBuffer.totalBytes += data.length;
+    if (_chunkBuffer.totalBytes >= SAVE_BATCH) _flushChunkBuffer();
+}
 
-    _chunkQueue.push({ rel_path: relPath, offset, data: chunkData });
+async function _flushChunkBuffer() {
+    if (!_chunkBuffer.chunks.length) return;
+    const totalLen = _chunkBuffer.chunks.reduce((s, c) => s + c.length, 0);
+    const merged = new Uint8Array(totalLen);
+    let pos = 0;
+    for (const c of _chunkBuffer.chunks) { merged.set(c, pos); pos += c.length; }
+    const item = { rel_path: _chunkBuffer.relPath, offset: _chunkBuffer.offset, data: merged };
+    _chunkBuffer.offset += totalLen;
+    _chunkBuffer.chunks = [];
+    _chunkBuffer.totalBytes = 0;
+    _chunkQueue.push(item);
     _processChunkQueue();
 }
 
-// Buffered chunk writer
 const _chunkQueue = [];
 let _chunkWriting = false;
 
 async function _processChunkQueue() {
-    if (_chunkWriting || _chunkQueue.length === 0) return;
+    if (_chunkWriting || !_chunkQueue.length) return;
     _chunkWriting = true;
-    while (_chunkQueue.length > 0) {
+    while (_chunkQueue.length) {
         if (_webrtc.cancelled) { _chunkQueue.length = 0; break; }
-        while (_webrtc.paused && !_webrtc.cancelled) await new Promise(r => setTimeout(r, 200));
-        const first = _chunkQueue.shift();
-        let merged = first.data;
-        let endOffset = first.offset + first.data.length;
-        while (_chunkQueue.length > 0 && _chunkQueue[0].rel_path === first.rel_path && _chunkQueue[0].offset === endOffset && merged.length < 256 * 1024) {
-            const next = _chunkQueue.shift();
-            const combined = new Uint8Array(merged.length + next.data.length);
-            combined.set(merged);
-            combined.set(next.data, merged.length);
-            merged = combined;
-            endOffset += next.data.length;
-        }
-        for (let attempt = 0; attempt < 3; attempt++) {
+        const item = _chunkQueue.shift();
+        for (let a = 0; a < 3; a++) {
             try {
-                await fetch(`/api/p2p/save-chunk?session=${encodeURIComponent(_webrtc.sessionId)}&rel_path=${encodeURIComponent(first.rel_path)}&offset=${first.offset}`, {
-                    method: "POST", body: merged,
-                });
+                await fetch(`/api/p2p/save-chunk?session=${encodeURIComponent(_webrtc.sessionId)}&rel_path=${encodeURIComponent(item.rel_path)}&offset=${item.offset}`, { method: "POST", body: item.data });
                 break;
             } catch (e) {
-                if (attempt === 2) log(`[p2p][webrtc] Lỗi lưu chunk (3 lần): ${e.message}`, "err");
-                else await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+                if (a === 2) log(`[p2p][webrtc] Lỗi lưu: ${e.message}`, "err");
+                else await new Promise(r => setTimeout(r, 300 * (a + 1)));
             }
         }
     }
@@ -2778,17 +2745,15 @@ async function _processChunkQueue() {
 }
 
 async function _drainChunkQueue() {
-    while (_chunkQueue.length > 0 || _chunkWriting) {
+    while (_chunkQueue.length || _chunkWriting) {
         await new Promise(r => setTimeout(r, 100));
-        if (!_chunkWriting && _chunkQueue.length > 0) _processChunkQueue();
+        if (!_chunkWriting && _chunkQueue.length) _processChunkQueue();
     }
 }
 
 function _webrtcUpdateProgress() {
-    const pfill = $("p2p-webrtc-pfill");
-    const ptext = $("p2p-webrtc-ptext");
-    const statusEl = $("p2p-webrtc-status");
-    const pct = _webrtcFileState.totalSize > 0 ? Math.min(100, (_webrtcFileState.receivedTotal / _webrtcFileState.totalSize * 100)) : 0;
+    const pfill = $("p2p-webrtc-pfill"), ptext = $("p2p-webrtc-ptext"), statusEl = $("p2p-webrtc-status");
+    const pct = _webrtcFileState.totalSize > 0 ? Math.min(100, _webrtcFileState.receivedTotal / _webrtcFileState.totalSize * 100) : 0;
     if (pfill) pfill.style.width = pct.toFixed(1) + "%";
     const elapsed = (Date.now() - _webrtcFileState.startTime) / 1000;
     const speed = elapsed > 0 ? _webrtcFileState.receivedTotal / elapsed : 0;
@@ -2799,25 +2764,20 @@ function _webrtcUpdateProgress() {
 async function _webrtcFinalize() {
     const statusEl = $("p2p-webrtc-status");
     try {
-        const r = await fetch("/api/p2p/save-done", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ session: _webrtc.sessionId, name: _webrtcFileState.shareName }),
-        });
+        const r = await fetch("/api/p2p/save-done", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session: _webrtc.sessionId, name: _webrtcFileState.shareName }) });
         const d = await r.json();
         if (d.ok) {
-            if (statusEl) statusEl.textContent = `Hoàn tất! ${d.file_count} file đã lưu vào ${d.saved_dir}`;
+            if (statusEl) statusEl.textContent = `Hoàn tất! ${d.file_count} file → ${d.saved_dir}`;
             log(`[p2p][webrtc] Hoàn tất! ${d.file_count} file → ${d.saved_dir}`, "ok");
-        } else {
-            if (statusEl) statusEl.textContent = "Lỗi lưu file: " + (d.error || "");
-        }
-    } catch (e) {
-        if (statusEl) statusEl.textContent = "Lỗi: " + e.message;
-    }
-    const ctrlWrap = $("p2p-webrtc-controls");
-    if (ctrlWrap) { ctrlWrap.classList.add("hidden"); ctrlWrap.style.display = "none"; }
+        } else { if (statusEl) statusEl.textContent = "Lỗi: " + (d.error || ""); }
+    } catch (e) { if (statusEl) statusEl.textContent = "Lỗi: " + e.message; }
+    const cw = $("p2p-webrtc-controls");
+    if (cw) { cw.classList.add("hidden"); cw.style.display = "none"; }
     if (_webrtc.peer) { _webrtc.peer.destroy(); _webrtc.peer = null; }
 }
+
+
+
 
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3231,18 +3191,17 @@ function clearLog() { $("log-body").innerHTML = ""; }
     }
 
     function showUpdateBanner(info) {
-        if ($("update-banner")) return;
+        if (document.getElementById("update-banner")) return;
         const banner = document.createElement("div");
         banner.id = "update-banner";
-        const dlUrl = info.download_url || `https://github.com/binhunicorps/AutoStudio/releases`;
         banner.innerHTML = `
             <div class="update-banner-content">
-                <span class="update-icon">🔄</span>
+                <span class="update-icon">\u{1F504}</span>
                 <span class="update-text">
-                    Co ban cap nhat moi: <strong>v${esc(info.local)}</strong> &rarr; <strong>v${esc(info.remote)}</strong>
+                    Có bản cập nhật mới: <strong>v${esc(info.local)}</strong> &rarr; <strong>v${esc(info.remote)}</strong>
                 </span>
-                <a href="${esc(dlUrl)}" target="_blank" class="btn sm primary" style="text-decoration:none">Tai ban moi</a>
-                <button class="btn sm" onclick="this.parentElement.parentElement.remove()">Bo qua</button>
+                <button class="btn sm primary" onclick="applyUpdate(this)">Cập nhật</button>
+                <button class="btn sm" onclick="this.parentElement.parentElement.remove()">Bỏ qua</button>
             </div>
         `;
         document.body.prepend(banner);
@@ -3250,3 +3209,39 @@ function clearLog() { $("log-body").innerHTML = ""; }
 
     setTimeout(poll, 3000);
 })();
+
+async function applyUpdate(btn) {
+    if (btn) { btn.disabled = true; btn.textContent = "Đang tải..."; }
+    try {
+        const r = await fetch("/api/apply-update", { method: "POST" });
+        const d = await r.json();
+        if (d.ok) {
+            const banner = document.getElementById("update-banner");
+            if (banner) {
+                banner.innerHTML = `
+                    <div class="update-banner-content update-success">
+                        <span class="update-icon">\u2705</span>
+                        <span class="update-text">Đang cập nhật và khởi động lại... Trang sẽ tự tải lại sau 10 giây.</span>
+                    </div>
+                `;
+            }
+            // Auto-reload after server restarts
+            setTimeout(() => { location.reload(); }, 10000);
+            // Keep trying to reconnect
+            let retries = 0;
+            const tryReload = setInterval(async () => {
+                try {
+                    const r2 = await fetch("/api/version", { signal: AbortSignal.timeout(2000) });
+                    if (r2.ok) { clearInterval(tryReload); location.reload(); }
+                } catch(_) {}
+                if (++retries > 30) clearInterval(tryReload);
+            }, 3000);
+        } else {
+            if (btn) { btn.disabled = false; btn.textContent = "Cập nhật"; }
+            log("[update] Lỗi: " + (d.error || ""), "err");
+        }
+    } catch (e) {
+        if (btn) { btn.disabled = false; btn.textContent = "Cập nhật"; }
+        log("[update] Lỗi: " + e.message, "err");
+    }
+}

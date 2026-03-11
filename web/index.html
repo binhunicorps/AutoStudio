@@ -287,11 +287,7 @@
                     </div>
 
                     <div class="p2p-card">
-                        <div id="p2p-compose-head" class="p2p-card-head">Tạo Token Gửi File</div>
-                        <div id="p2p-edit-badge" class="p2p-edit-badge hidden">
-                            <span id="p2p-edit-badge-text"></span>
-                            <button class="btn sm" onclick="cancelP2PEdit()">Hủy</button>
-                        </div>
+                        <div class="p2p-card-head">Chia Sẻ File</div>
                         <label class="field-label">Tên Nhóm File</label>
                         <input id="p2p-share-name" class="inp" type="text" placeholder="VD: Tài liệu chủ đề A">
                         <div class="btn-row p2p-pick-actions">
@@ -303,15 +299,8 @@
                         </div>
                         <div id="p2p-picked-summary" class="muted p2p-meta">Chưa chọn file nào.</div>
                         <div id="p2p-picked-files" class="p2p-picked-files"></div>
-                        <button id="btn-p2p-create" class="btn primary" onclick="p2pCreateShare()" disabled style="margin-top:10px;width:100%">Tạo
-                            Token</button>
-                        <div id="p2p-new-token-wrap" class="p2p-token-wrap hidden">
-                            <span>Token:</span>
-                            <code id="p2p-new-token">------</code>
-                            <button class="btn sm" onclick="copyP2PToken()">Copy</button>
-                            <button class="btn sm primary" onclick="webrtcStartSharing()" id="btn-p2p-webrtc-share">Chia sẻ qua Internet</button>
-                        </div>
-                        <div id="p2p-peer-id-wrap" class="p2p-token-wrap hidden" style="margin-top:6px">
+                        <button id="btn-p2p-create" class="btn primary" onclick="p2pShareAndConnect()" disabled style="margin-top:10px;width:100%">Chia sẻ</button>
+                        <div id="p2p-peer-id-wrap" class="p2p-token-wrap hidden" style="margin-top:8px">
                             <span>Peer ID:</span>
                             <code id="p2p-peer-id">---</code>
                             <button class="btn sm" onclick="copyP2PPeerId()">Copy</button>

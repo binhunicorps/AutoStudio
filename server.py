@@ -2712,6 +2712,132 @@ def api_check_update():
     return jsonify(_update_cache)
 
 
+@app.route("/api/apply-update", methods=["POST"])
+def api_apply_update():
+    """Download latest release ZIP, extract, create updater batch, exit."""
+    if not _update_cache.get("has_update"):
+        return jsonify({"error": "Không có bản cập nhật"}), 400
+    download_url = _update_cache.get("download_url", "")
+    if not download_url:
+        return jsonify({"error": "Không có URL tải về"}), 400
+
+    staging_dir = os.path.join(BASE_DIR, "_update_staging")
+    zip_path = os.path.join(BASE_DIR, "_update.zip")
+
+    try:
+        # Clean previous staging
+        if os.path.isdir(staging_dir):
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        if os.path.isfile(zip_path):
+            os.remove(zip_path)
+
+        # Download ZIP
+        import requests as _req
+        cfg = _load_config()
+        github_token = cfg.get("github_token", "").strip()
+        headers = {"Accept": "application/vnd.github.v3+json"}
+        if github_token:
+            headers["Authorization"] = f"token {github_token}"
+        _broadcast_log("[update] Dang tai ban cap nhat...")
+        r = _req.get(download_url, headers=headers, stream=True, timeout=120,
+                     allow_redirects=True)
+        if r.status_code != 200:
+            return jsonify({"error": f"HTTP {r.status_code} khi tai ZIP"}), 500
+        with open(zip_path, "wb") as zf:
+            for chunk in r.iter_content(chunk_size=256 * 1024):
+                zf.write(chunk)
+        _broadcast_log(f"[update] Da tai xong ({os.path.getsize(zip_path)} bytes)")
+
+        # Extract ZIP
+        import zipfile
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(staging_dir)
+        os.remove(zip_path)
+
+        # Find the extracted top-level folder (GitHub ZIPs have one)
+        extracted_items = os.listdir(staging_dir)
+        source_dir = staging_dir
+        if len(extracted_items) == 1 and os.path.isdir(os.path.join(staging_dir, extracted_items[0])):
+            source_dir = os.path.join(staging_dir, extracted_items[0])
+
+        # Copy user config from current to new version
+        user_data_files = ["config.json", "styles.json", "video_styles.json", "p2p_shares.json"]
+        new_data_dir = os.path.join(source_dir, "data")
+        os.makedirs(new_data_dir, exist_ok=True)
+        for fname in user_data_files:
+            src = os.path.join(BASE_DIR, "data", fname)
+            if os.path.isfile(src):
+                shutil.copy2(src, os.path.join(new_data_dir, fname))
+        _broadcast_log("[update] Da sao chep cau hinh nguoi dung")
+
+        # Generate updater batch script
+        bat_path = os.path.join(BASE_DIR, "_do_update.bat")
+        # Use robocopy for safe overwrite (available on all Windows)
+        bat_content = f"""@echo off
+chcp 65001 >nul 2>&1
+echo ========================================
+echo   Auto Studio - Dang cap nhat...
+echo ========================================
+echo.
+echo Cho server tat...
+timeout /t 3 /nobreak >nul
+
+echo Sao chep file moi...
+robocopy "{source_dir}" "{BASE_DIR}" /E /IS /IT /NFL /NDL /NP /XD "_update_staging" "__pycache__" ".git" "runtime" /XF "_do_update.bat"
+if errorlevel 8 (
+    echo LOI: Khong the sao chep file.
+    pause
+    exit /b 1
+)
+
+echo Don dep...
+rmdir /S /Q "{staging_dir}" 2>nul
+
+echo Tat server cu...
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr :5000 ^| findstr LISTENING') do taskkill /F /PID %%a >nul 2>&1
+
+echo Khoi dong lai...
+cd /d "{BASE_DIR}"
+if exist "AutoStudio.vbs" (
+    start "" wscript "AutoStudio.vbs"
+) else (
+    start "" cmd /c "scripts\\run_server.bat"
+)
+
+echo Cap nhat hoan tat!
+timeout /t 2 /nobreak >nul
+del "%~f0"
+"""
+        with open(bat_path, "w", encoding="ascii", errors="replace") as f:
+            f.write(bat_content)
+        _broadcast_log("[update] San sang cap nhat. Dang khoi dong lai...")
+
+        # Schedule batch execution and server shutdown
+        def _run_updater():
+            time.sleep(1)
+            subprocess.Popen(
+                ["cmd", "/c", bat_path],
+                cwd=BASE_DIR,
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
+            )
+            time.sleep(0.5)
+            os._exit(0)
+
+        threading.Thread(target=_run_updater, daemon=True).start()
+        return jsonify({"ok": True, "message": "Dang cap nhat, server se khoi dong lai..."})
+
+    except Exception as e:
+        _broadcast_log(f"[update] Loi: {e}")
+        # Cleanup on error
+        if os.path.isfile(zip_path):
+            try: os.remove(zip_path)
+            except: pass
+        if os.path.isdir(staging_dir):
+            try: shutil.rmtree(staging_dir, ignore_errors=True)
+            except: pass
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/version", methods=["GET"])
 def api_version():
     return jsonify({"version": _read_local_version()})

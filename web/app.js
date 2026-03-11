@@ -2334,8 +2334,8 @@ function renderP2PShares() {
     if (!createdEl || !downloadedEl) return;
     const shares = Array.isArray(S.p2p.shares) ? S.p2p.shares : [];
     if (!shares.length) {
-        createdEl.innerHTML = '<div class="tbl-empty">Chưa có token nào</div>';
-        downloadedEl.innerHTML = '<div class="tbl-empty">Chưa có token nào</div>';
+        createdEl.innerHTML = '<div class="tbl-empty">Chưa có share nào</div>';
+        downloadedEl.innerHTML = '<div class="tbl-empty">Chưa tải file nào</div>';
         return;
     }
     createdEl.innerHTML = shares.map(s => {
@@ -2343,20 +2343,17 @@ function renderP2PShares() {
         const active = S.p2p.selectedToken === token;
         const createdAt = formatP2PDate(s.created_at);
         const updatedAt = formatP2PDate(s.updated_at);
-        const lastDownloadAt = formatP2PDate(s.last_download_at);
         return `
             <div class="p2p-share-card${active ? " active" : ""}">
                 <div class="p2p-share-top">
                     <div class="p2p-share-name">${esc(s.name || "(No name)")}</div>
                     <div class="p2p-share-top-actions">
-                        <button class="p2p-share-token" type="button" title="Click để copy token"
-                            onclick="copyP2PShareToken('${token}')">${esc(token)}</button>
                         <button class="btn sm" onclick="startP2PEdit('${token}')">Chỉnh sửa</button>
                         <button class="btn sm danger" onclick="p2pDeleteShare('${token}')">Xóa</button>
                     </div>
                 </div>
                 <div class="p2p-share-meta">
-                    ${Number(s.file_count || 0)} file | ${formatP2PSize(s.total_size || 0)} | tạo: ${esc(createdAt)} | cập nhật: ${esc(updatedAt)} | tải: ${Number(s.download_count || 0)} | lần cuối: ${esc(lastDownloadAt)}
+                    ${Number(s.file_count || 0)} file | ${formatP2PSize(s.total_size || 0)} | tạo: ${esc(createdAt)} | cập nhật: ${esc(updatedAt)}
                 </div>
             </div>
         `;
@@ -2367,32 +2364,23 @@ function renderP2PShares() {
         .sort((a, b) => String(b.last_download_at || "").localeCompare(String(a.last_download_at || "")));
 
     downloadedEl.innerHTML = downloadedShares.length ? downloadedShares.map(s => {
-        const token = sanitizeP2PToken(s.token || "");
         const downloadPath = String(s.last_download_dir || "").trim();
         const lastDownloadAt = formatP2PDate(s.last_download_at);
-        const canOpenFolder = s.download_dir_exists !== false;
-        const folderStatus = s.download_dir_exists === false
-            ? "Thư mục tải về không còn tồn tại"
-            : "Đã lưu tại";
         return `
             <div class="p2p-share-card">
                 <div class="p2p-share-top">
                     <div class="p2p-share-name">${esc(s.name || "(No name)")}</div>
-                    <div class="p2p-share-top-actions">
-                        <button class="p2p-share-token" type="button" title="Click để copy token"
-                            onclick="copyP2PShareToken('${token}')">${esc(token)}</button>
-                    </div>
                 </div>
                 <div class="p2p-share-meta">
                     ${Number(s.file_count || 0)} file | ${formatP2PSize(s.total_size || 0)} | tải lần cuối: ${esc(lastDownloadAt)}
                 </div>
-                <div class="p2p-share-path">${esc(folderStatus)}${downloadPath ? `<br>${esc(downloadPath)}` : ""}</div>
+                <div class="p2p-share-path">Đã lưu tại${downloadPath ? `<br>${esc(downloadPath)}` : ""}</div>
                 <div class="p2p-share-actions">
-                    <button class="btn sm primary" onclick="openP2PDownloadFolder('${token}')"${canOpenFolder ? "" : " disabled"}>Mở thư mục</button>
+                    <button class="btn sm primary" onclick="openP2PFolder('${esc(downloadPath)}')">Mở thư mục</button>
                 </div>
             </div>
         `;
-    }).join("") : '<div class="tbl-empty">Chưa có token nào đã download</div>';
+    }).join("") : '<div class="tbl-empty">Chưa tải file nào</div>';
 }
 
 async function loadP2PShares(preferToken = "") {
@@ -2436,6 +2424,14 @@ async function p2pDeleteShare(token) {
     }
 }
 
+async function openP2PFolder(folderPath) {
+    if (!folderPath) return;
+    try {
+        await fetch("/api/open-folder", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: folderPath }) });
+    } catch (e) {
+        log("[p2p] Lỗi mở thư mục: " + e.message, "err");
+    }
+}
 
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2774,6 +2770,8 @@ async function _webrtcFinalize() {
     const cw = $("p2p-webrtc-controls");
     if (cw) { cw.classList.add("hidden"); cw.style.display = "none"; }
     if (_webrtc.peer) { _webrtc.peer.destroy(); _webrtc.peer = null; }
+    // Refresh download list
+    try { await loadP2PShares(); } catch(_) {}
 }
 
 

@@ -2707,6 +2707,16 @@ def _check_for_updates():
         _update_cache.update(checked=True, error=str(e)[:100])
 
 
+@app.route("/api/open-folder", methods=["POST"])
+def api_open_folder():
+    data = request.get_json(silent=True) or {}
+    folder = data.get("path", "").strip()
+    if not folder or not os.path.isdir(folder):
+        return jsonify({"error": "Thư mục không tồn tại"}), 400
+    subprocess.Popen(["explorer", os.path.normpath(folder)])
+    return jsonify({"ok": True})
+
+
 @app.route("/api/check-update", methods=["GET"])
 def api_check_update():
     return jsonify(_update_cache)

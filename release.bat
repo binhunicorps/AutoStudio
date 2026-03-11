@@ -4,9 +4,7 @@ chcp 65001 >nul
 title Auto Studio - Release
 
 echo.
-echo ╔══════════════════════════════════════╗
-echo ║     Auto Studio - Tao Phien Ban     ║
-echo ╚══════════════════════════════════════╝
+echo Auto Studio - Tao Phien Ban
 echo.
 
 set "APP_DIR=%~dp0"
@@ -31,10 +29,8 @@ set /p NOTES="  Mo ta cap nhat: "
 if "%NOTES%"=="" set "NOTES=Release v%NEW_VER%"
 
 echo.
-echo ════════════════════════════════════════
-echo   Phien ban: v%CURRENT_VER% → v%NEW_VER%
+echo   Phien ban: v%CURRENT_VER% -^> v%NEW_VER%
 echo   Mo ta: %NOTES%
-echo ════════════════════════════════════════
 
 set /p CONFIRM="  Xac nhan? (y/n): "
 if /i not "%CONFIRM%"=="y" (
@@ -70,11 +66,8 @@ git push origin main
 git push origin "v%NEW_VER%"
 
 echo.
-echo ════════════════════════════════════════
-echo   ✅ Da tao phien ban v%NEW_VER%
+echo   Da tao phien ban v%NEW_VER%
 echo   Tag: v%NEW_VER%
-echo   GitHub: https://github.com/binhunicorps/AutoStudio/releases
-echo ════════════════════════════════════════
 echo.
 pause
 exit /b 0

@@ -4,9 +4,7 @@ chcp 65001 >nul
 title Auto Studio - Update
 
 echo.
-echo ╔══════════════════════════════════════╗
-echo ║       Auto Studio - Cap Nhat        ║
-echo ╚══════════════════════════════════════╝
+echo Auto Studio - Cap Nhat
 echo.
 
 set "APP_DIR=%~dp0"
@@ -53,7 +51,7 @@ if "%LOCAL%"=="%REMOTE%" (
 echo [update] Co phien ban moi! Dang cap nhat...
 echo.
 
-REM Pull updates (only app files, user data is in .gitignore)
+REM Pull updates
 git pull --ff-only origin main 2>&1
 if errorlevel 1 (
     echo.
@@ -63,15 +61,9 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM Invalidate dependency cache so next startup re-checks
-set "PY_DIR=%APP_DIR%\runtime\python"
-if exist "%PY_DIR%\.deps_ok" del "%PY_DIR%\.deps_ok" 2>nul
-
 echo.
-echo ════════════════════════════════════════
-echo   Cap nhat thanh cong!
-echo   Hay khoi dong lai Auto Studio.
-echo ════════════════════════════════════════
+echo Cap nhat thanh cong!
+echo Hay khoi dong lai Auto Studio.
 echo.
 pause
 exit /b 0

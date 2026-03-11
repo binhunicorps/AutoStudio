@@ -8,7 +8,7 @@ for %%I in ("%APP_DIR%") do set "APP_DIR=%%~fI"
 set "PY_DIR=%APP_DIR%\runtime\python"
 set "PYTHON_EXE=%PY_DIR%\python.exe"
 
-REM ── Try embedded Python first, then fall back to system Python ──
+REM Try embedded Python first, then system Python
 if exist "%PYTHON_EXE%" goto :python_ready
 
 where python >nul 2>&1
@@ -20,7 +20,7 @@ if errorlevel 1 (
 set "PYTHON_EXE=python"
 
 :python_ready
-REM Ensure project root is on sys.path for embedded Python (_pth mode).
+REM Ensure project root is on sys.path for embedded Python
 if not "%PYTHON_EXE%"=="python" (
     set "PY_PTH="
     for %%F in ("%PY_DIR%\python*._pth") do (

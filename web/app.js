@@ -3219,20 +3219,20 @@ async function applyUpdate(btn) {
                 banner.innerHTML = `
                     <div class="update-banner-content update-success">
                         <span class="update-icon">\u2705</span>
-                        <span class="update-text">Đang cập nhật và khởi động lại... Trang sẽ tự tải lại sau 10 giây.</span>
+                        <span class="update-text">
+                            Đã cập nhật thành công! Phiên bản mới đang khởi động...<br>
+                            Cửa sổ này sẽ tự đóng sau 3 giây.
+                        </span>
                     </div>
                 `;
             }
-            // Auto-reload after server restarts
-            setTimeout(() => { location.reload(); }, 10000);
-            // Keep trying to reconnect
-            let retries = 0;
-            const tryReload = setInterval(async () => {
-                try {
-                    const r2 = await fetch("/api/version", { signal: AbortSignal.timeout(2000) });
-                    if (r2.ok) { clearInterval(tryReload); location.reload(); }
-                } catch(_) {}
-                if (++retries > 30) clearInterval(tryReload);
+            log("[update] Đã cập nhật. Đang đóng ứng dụng cũ...", "ok");
+            // Auto-close after 3s — triggers AutoStudio.vbs cleanup
+            setTimeout(() => {
+                try { window.close(); } catch(_) {}
+                // Fallback if window.close() blocked
+                if (banner) banner.querySelector(".update-text").innerHTML =
+                    "Phiên bản mới đã khởi động.<br><strong>Vui lòng đóng tab này.</strong>";
             }, 3000);
         } else {
             if (btn) { btn.disabled = false; btn.textContent = "Cập nhật"; }

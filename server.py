@@ -2481,6 +2481,32 @@ def p2p_save_done():
         return jsonify({"error": str(e)}), 500
 
     file_count = len(info["files"])
+    # Calculate total size
+    total_size = 0
+    for fn in info["files"]:
+        fp = os.path.join(final_dir, fn)
+        if os.path.isfile(fp):
+            total_size += os.path.getsize(fp)
+
+    # Create download entry in p2p_shares for download list
+    now_iso = datetime.now().isoformat(timespec="seconds")
+    dl_entry = {
+        "token": f"dl-{session_id[:8]}",
+        "name": share_name,
+        "files": [{"rel_path": fn} for fn in info["files"]],
+        "created_at": now_iso,
+        "updated_at": now_iso,
+        "download_count": 1,
+        "last_download_at": now_iso,
+        "last_download_dir": final_dir,
+        "file_count": file_count,
+        "total_size": total_size,
+        "type": "download",
+    }
+    with _p2p_lock:
+        _p2p_shares.append(dl_entry)
+        _save_p2p_shares_locked()
+
     _broadcast_log(f"[p2p][webrtc] download done: {file_count} files -> {final_dir}")
     return jsonify({"ok": True, "saved_dir": final_dir, "file_count": file_count})
 
@@ -2724,15 +2750,19 @@ def api_check_update():
 
 @app.route("/api/apply-update", methods=["POST"])
 def api_apply_update():
-    """Download latest release ZIP, extract, create updater batch, exit."""
+    """Download latest release, extract to new versioned folder, copy config, launch new version."""
     if not _update_cache.get("has_update"):
         return jsonify({"error": "Không có bản cập nhật"}), 400
     download_url = _update_cache.get("download_url", "")
+    remote_ver = _update_cache.get("remote", "")
     if not download_url:
         return jsonify({"error": "Không có URL tải về"}), 400
 
-    staging_dir = os.path.join(BASE_DIR, "_update_staging")
-    zip_path = os.path.join(BASE_DIR, "_update.zip")
+    parent_dir = os.path.dirname(BASE_DIR)  # e.g., D:\Software
+    new_folder_name = f"AutoStudio-{remote_ver}"
+    new_install_dir = os.path.join(parent_dir, new_folder_name)
+    staging_dir = os.path.join(parent_dir, "_update_staging")
+    zip_path = os.path.join(parent_dir, "_update.zip")
 
     try:
         # Clean previous staging
@@ -2740,6 +2770,8 @@ def api_apply_update():
             shutil.rmtree(staging_dir, ignore_errors=True)
         if os.path.isfile(zip_path):
             os.remove(zip_path)
+        if os.path.isdir(new_install_dir):
+            shutil.rmtree(new_install_dir, ignore_errors=True)
 
         # Download ZIP
         import requests as _req
@@ -2770,44 +2802,46 @@ def api_apply_update():
         if len(extracted_items) == 1 and os.path.isdir(os.path.join(staging_dir, extracted_items[0])):
             source_dir = os.path.join(staging_dir, extracted_items[0])
 
-        # Copy user config from current to new version
+        # Rename extracted folder to new versioned name
+        shutil.move(source_dir, new_install_dir)
+        # Clean staging if it's still there
+        if os.path.isdir(staging_dir):
+            shutil.rmtree(staging_dir, ignore_errors=True)
+
+        # Copy user config from current version to new version
         user_data_files = ["config.json", "styles.json", "video_styles.json", "p2p_shares.json"]
-        new_data_dir = os.path.join(source_dir, "data")
+        new_data_dir = os.path.join(new_install_dir, "data")
         os.makedirs(new_data_dir, exist_ok=True)
         for fname in user_data_files:
             src = os.path.join(BASE_DIR, "data", fname)
             if os.path.isfile(src):
                 shutil.copy2(src, os.path.join(new_data_dir, fname))
+
+        # Copy runtime folder (Python environment) — use robocopy in batch for speed
+        # Copy output folder reference from config
         _broadcast_log("[update] Da sao chep cau hinh nguoi dung")
 
-        # Generate updater batch script
-        bat_path = os.path.join(BASE_DIR, "_do_update.bat")
-        # Use robocopy for safe overwrite (available on all Windows)
+        # Generate updater batch script in parent dir
+        bat_path = os.path.join(parent_dir, "_do_update.bat")
+        runtime_src = os.path.join(BASE_DIR, "runtime")
+        runtime_dst = os.path.join(new_install_dir, "runtime")
         bat_content = f"""@echo off
 chcp 65001 >nul 2>&1
 echo ========================================
-echo   Auto Studio - Dang cap nhat...
+echo   Auto Studio - Dang cap nhat v{remote_ver}
 echo ========================================
 echo.
-echo Cho server tat...
-timeout /t 3 /nobreak >nul
-
-echo Sao chep file moi...
-robocopy "{source_dir}" "{BASE_DIR}" /E /IS /IT /NFL /NDL /NP /XD "_update_staging" "__pycache__" ".git" "runtime" /XF "_do_update.bat"
-if errorlevel 8 (
-    echo LOI: Khong the sao chep file.
-    pause
-    exit /b 1
-)
-
-echo Don dep...
-rmdir /S /Q "{staging_dir}" 2>nul
-
 echo Tat server cu...
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr :5000 ^| findstr LISTENING') do taskkill /F /PID %%a >nul 2>&1
+timeout /t 2 /nobreak >nul
 
-echo Khoi dong lai...
-cd /d "{BASE_DIR}"
+echo Sao chep runtime...
+if exist "{runtime_src}" (
+    robocopy "{runtime_src}" "{runtime_dst}" /E /NFL /NDL /NP /NJH /NJS
+)
+
+echo Khoi dong phien ban moi...
+cd /d "{new_install_dir}"
 if exist "AutoStudio.vbs" (
     start "" wscript "AutoStudio.vbs"
 ) else (
@@ -2815,30 +2849,30 @@ if exist "AutoStudio.vbs" (
 )
 
 echo Cap nhat hoan tat!
-timeout /t 2 /nobreak >nul
+echo Phien ban moi: {new_install_dir}
+timeout /t 3 /nobreak >nul
 del "%~f0"
 """
         with open(bat_path, "w", encoding="ascii", errors="replace") as f:
             f.write(bat_content)
-        _broadcast_log("[update] San sang cap nhat. Dang khoi dong lai...")
+        _broadcast_log(f"[update] San sang. Phien ban moi: {new_install_dir}")
 
         # Schedule batch execution and server shutdown
         def _run_updater():
             time.sleep(1)
             subprocess.Popen(
                 ["cmd", "/c", bat_path],
-                cwd=BASE_DIR,
+                cwd=parent_dir,
                 creationflags=subprocess.CREATE_NEW_CONSOLE,
             )
             time.sleep(0.5)
             os._exit(0)
 
         threading.Thread(target=_run_updater, daemon=True).start()
-        return jsonify({"ok": True, "message": "Dang cap nhat, server se khoi dong lai..."})
+        return jsonify({"ok": True, "new_dir": new_install_dir, "message": f"Dang cai dat v{remote_ver}..."})
 
     except Exception as e:
         _broadcast_log(f"[update] Loi: {e}")
-        # Cleanup on error
         if os.path.isfile(zip_path):
             try: os.remove(zip_path)
             except: pass

@@ -3,6 +3,10 @@ server.py — Auto Studio Web App
 Flask backend with REST API + SSE for real-time streaming.
 """
 
+import os as _os, sys as _sys
+# Add bundled libraries (lib/) to path so no pip install needed
+_sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "lib"))
+
 import json
 import os
 import threading

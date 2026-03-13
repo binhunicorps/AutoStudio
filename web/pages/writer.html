@@ -1,0 +1,108 @@
+<!-- PAGE: Writer -->
+<section id="page-writer" class="page active">
+    <div class="writer-layout">
+        <!-- Left Panel -->
+        <div class="panel left-panel" id="left-panel">
+            <h2 class="panel-title">✍ Tạo Content</h2>
+
+            <div class="left-section">
+                <label class="field-label">Chủ đề / Nội dung / Yêu cầu <span class="req">*</span></label>
+                <textarea id="inp-topic" class="inp" rows="3" placeholder="Nhập chủ đề content..."></textarea>
+
+                <label class="field-label">Ngôn ngữ</label>
+                <select id="sel-lang" class="inp sel">
+                    <option value="English" selected>Tiếng Anh</option>
+                    <option value="Tiếng Việt">Tiếng Việt</option>
+                    <option value="日本語">Tiếng Nhật</option>
+                    <option value="한국어">Tiếng Hàn</option>
+                </select>
+
+                <label class="field-label">Content Style</label>
+                <select id="sel-style" class="inp sel"></select>
+            </div>
+
+            <div class="left-section">
+                <label class="field-label">Model Viết Content</label>
+                <select id="sel-model" class="inp sel"></select>
+
+                <label class="field-label">Video Prompt Style</label>
+                <select id="sel-vstyle" class="inp sel"></select>
+
+                <label class="field-label">Model Video Prompt</label>
+                <select id="sel-model-video" class="inp sel"></select>
+            </div>
+
+            <div class="left-section run-controls">
+                <div class="btn-row main-actions">
+                    <button id="btn-start" class="btn primary" onclick="startPipeline()">▶ Bắt Đầu</button>
+                    <button id="btn-pause" class="btn" onclick="togglePause()" disabled>⏸ Tạm Dừng</button>
+                    <button id="btn-stop" class="btn danger" onclick="stopPipeline()" disabled>✕ Huỷ</button>
+                </div>
+
+                <div id="progress-area" class="progress-area hidden">
+                    <div class="pbar">
+                        <div class="pfill" id="pfill"></div>
+                    </div>
+                    <div class="ptext" id="ptext">Đang chờ...</div>
+                </div>
+            </div>
+
+            <div class="step-actions">
+                <div class="step-title">Chạy từng bước</div>
+                <button id="btn-step-write" class="btn sm" onclick="runStep('write')" title="Viết Content">Viết
+                    Content</button>
+                <button id="btn-step-split" class="btn sm" onclick="runStep('split')" title="Tách Đoạn">Tách
+                    Đoạn</button>
+                <button id="btn-step-video" class="btn sm" onclick="runStep('video')"
+                    title="Tạo Video Prompt">Tạo Video Prompt</button>
+                <button id="btn-step-continue" class="btn sm hidden" onclick="runStep('continue_prompts')"
+                    title="Tạo Video Prompt Thiếu">Tạo Video Prompt Thiếu</button>
+            </div>
+
+        </div>
+
+        <!-- Right Panel -->
+        <div class="panel right-panel" id="right-panel">
+            <div class="tab-bar">
+                <button class="tab active" data-tab="script" onclick="switchTab('script')">✏ Content</button>
+                <button class="tab" data-tab="video" onclick="switchTab('video')">🎬 Video Prompt</button>
+                <div id="writer-tab-actions" class="tab-actions">
+                    <button id="btn-script-translate" class="btn sm tab-action-script"
+                        onclick="toggleScriptTranslate()" title="Dịch nội dung Content sang tiếng Việt">🌐 Dịch
+                        VI</button>
+                    <button id="btn-content-reset" class="btn sm tab-action-script"
+                        onclick="revertContentDraft(false)" title="Huỷ chỉnh sửa và quay về nội dung gốc"
+                        disabled>↩ Huỷ chỉnh sửa</button>
+                    <button id="btn-content-apply" class="btn sm primary tab-action-script"
+                        onclick="requestUpdateContent()" title="Lưu chỉnh sửa Content vào project" disabled>💾
+                        Cập Nhật Content</button>
+                    <button id="btn-regen-selected" class="btn sm tab-action-video hidden"
+                        onclick="regenerateSelectedPrompts()" title="Tạo Lại Video Prompt">🔄 Tạo Lại Video
+                        Prompt</button>
+                </div>
+            </div>
+
+            <!-- Script tab -->
+            <div id="tab-script" class="tab-pane active">
+                <div class="script-editor">
+                    <pre id="script-lines" class="script-lines">1</pre>
+                    <textarea id="script-output" class="output-box"
+                        placeholder="Nội dung content sẽ hiển thị ở đây khi pipeline chạy..."></textarea>
+                </div>
+            </div>
+
+            <!-- Video tab -->
+            <div id="tab-video" class="tab-pane">
+                <div class="tbl-head">
+                    <div class="th c-chk"><input type="checkbox" id="chk-all" onchange="toggleAll()"></div>
+                    <div class="th c-idx">#</div>
+                    <div class="th c-seg">Segments</div>
+                    <div class="th c-prm">Video Prompt</div>
+                </div>
+                <div class="tbl-body" id="tbl-body">
+                    <div class="tbl-empty">Chưa có dữ liệu</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>

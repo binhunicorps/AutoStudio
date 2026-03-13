@@ -220,11 +220,14 @@ function onScriptInputChanged() {
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
-    reorderSidebarNav();
     loadConfig();
     loadStyles();
     loadVersion();
     connectSSE();
+});
+
+function onPagesLoaded() {
+    reorderSidebarNav();
     setupNav();
     const scriptEl = $("script-output");
     if (scriptEl) {
@@ -250,7 +253,10 @@ document.addEventListener("DOMContentLoaded", () => {
     updateWriterTabActionsVisibility();
     updateContinueButtonVisibility();
     updateRegenerateSelectedVisibility();
-});
+    // Re-fill dropdown selectors after pages loaded
+    fillModels();
+    fillStyles();
+}
 
 function reorderSidebarNav() {
     const navPrompts = $("nav-prompts");
@@ -477,7 +483,7 @@ async function loadVersion() {
         const d = await r.json();
         const el = $("sidebar-version");
         if (el && d.version) el.textContent = `v${d.version} @hvbinh73`;
-    } catch (_) {}
+    } catch (_) { }
 }
 
 async function loadConfig() {
@@ -498,13 +504,17 @@ async function loadConfig() {
 
 function fillModels() {
     const models = getUserSelectableModels();
-    ["sel-model", "sel-model-video"].forEach(id => {
+    ["sel-model", "sel-model-video", "sel-remix-model", "sel-remix-model-analyze", "sel-remix-model-video"].forEach(id => {
         const el = $(id);
+        if (!el) return;
         el.innerHTML = models.map(m => `<option value="${m}">${m}</option>`).join("")
             || '<option value="">— chưa có model —</option>';
     });
     setSelectValueOrFallback($("sel-model"), S.config.model);
     setSelectValueOrFallback($("sel-model-video"), S.config.model_video);
+    setSelectValueOrFallback($("sel-remix-model"), S.config.model);
+    setSelectValueOrFallback($("sel-remix-model-analyze"), S.config.model);
+    setSelectValueOrFallback($("sel-remix-model-video"), S.config.model_video);
 }
 
 async function saveSettings() {
@@ -559,8 +569,12 @@ async function loadStyles() {
 }
 
 function fillStyles() {
-    $("sel-style").innerHTML = S.styles.content.map(s => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join("");
-    $("sel-vstyle").innerHTML = S.styles.video.map(s => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join("");
+    const contentOpts = S.styles.content.map(s => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join("");
+    const videoOpts = S.styles.video.map(s => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join("");
+    const ss = $("sel-style"); if (ss) ss.innerHTML = contentOpts;
+    const sv = $("sel-vstyle"); if (sv) sv.innerHTML = videoOpts;
+    const rs = $("sel-remix-style"); if (rs) rs.innerHTML = contentOpts;
+    const rv = $("sel-remix-vstyle"); if (rv) rv.innerHTML = videoOpts;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -585,7 +599,7 @@ function connectSSE() {
             const d = JSON.parse(e.data);
             if (d.type === "log") log(d.message, logCls(d.message), d.time);
             else if (d.type === "state") onState(d);
-            else if (d.type === "script_chunk") onScriptChunk(d.chunk);
+            else if (d.type === "script_chunk") onScriptChunk(d.chunk, d.source);
             else if (d.type === "queue_state") onQueueState(d);
         } catch (_) { }
     };
@@ -621,7 +635,22 @@ function logCls(m) {
     return "";
 }
 
-function onScriptChunk(chunk) {
+function onScriptChunk(chunk, source) {
+    const isRemix = source === "remix";
+    if (isRemix) {
+        // Route to Remix Content tab
+        const el = $("remix-script-output");
+        if (el) {
+            el.value = (el.value || "") + (chunk || "");
+            el.scrollTop = el.scrollHeight;
+            // Update line numbers
+            const lineEl = $("remix-script-lines");
+            if (lineEl) lineEl.textContent = toNumberedLines(el.value);
+        }
+        switchRemixTab("remix-script");
+        return;
+    }
+    // Default: Writer page
     const el = $("script-output");
     if (S.scriptViewMode !== "original") {
         S.scriptViewMode = "original";
@@ -648,6 +677,78 @@ function onState(d) {
 
     const isDone = d.step === "done" || d.step === "error" || d.step === "stopped";
     const isActive = d.running && !isDone;
+    const isRemix = d.source === "remix";
+
+    if (isRemix) {
+        // Route to Remix page UI
+        const btnStart = $("btn-remix-start");
+        const btnPause = $("btn-remix-pause");
+        const btnStop = $("btn-remix-stop");
+        if (btnStart) btnStart.disabled = isActive;
+        if (btnPause) { btnPause.disabled = !isActive; btnPause.textContent = d.paused ? "▶ Tiếp Tục" : "⏸ Tạm Dừng"; }
+        if (btnStop) { btnStop.disabled = !isActive || !d.paused; }
+
+        const pa = $("remix-progress-area");
+        if (pa && (d.running || isDone)) {
+            pa.classList.remove("hidden");
+            const pct = d.total > 0 ? (d.progress / d.total * 100) : 0;
+            const pfill = $("remix-pfill"); if (pfill) pfill.style.width = pct + "%";
+            const names = { extract: "Trích xuất...", count: "Đếm ký tự...", analyze: "Phân tích...", rewrite: "Viết lại...", split: "Tách đoạn...", video: "Tạo video prompt...", done: "✓ Hoàn thành!", error: "✗ Lỗi", stopped: "⏹ Đã dừng", cancelled: "⏹ Đã huỷ" };
+            const ptext = $("remix-ptext"); if (ptext) ptext.textContent = d.paused ? "⏸ Đã tạm dừng" : (names[d.step] || d.step);
+        }
+
+        // YouTube info → populate Content Gốc tab
+        if (d.youtube_info) {
+            const yi = d.youtube_info;
+            _ytData = Object.assign({ok: true}, yi);
+            const emptyEl = $("remix-original-empty");
+            const contentEl = $("remix-original-content");
+            if (emptyEl) emptyEl.classList.add("hidden");
+            if (contentEl) contentEl.classList.remove("hidden");
+
+            const titleEl = $("remix-og-title"); if (titleEl) titleEl.textContent = yi.title || "";
+            const dur = yi.duration ? Math.floor(yi.duration / 60) + ":" + String(yi.duration % 60).padStart(2, "0") : "?";
+            const dateEl = $("remix-og-date"); if (dateEl) dateEl.textContent = _formatYTDate(yi.upload_date);
+            const viewsEl = $("remix-og-views"); if (viewsEl) viewsEl.textContent = (yi.view_count || 0).toLocaleString() + " views";
+            const chanEl = $("remix-og-channel"); if (chanEl) chanEl.textContent = yi.channel || "—";
+            const durEl = $("remix-og-duration"); if (durEl) durEl.textContent = dur;
+            const tagsEl = $("remix-og-tags");
+            if (tagsEl) { const tags = Array.isArray(yi.tags) ? yi.tags : []; tagsEl.textContent = tags.length ? tags.join(", ") : "Không có từ khoá"; }
+            const descEl = $("remix-og-desc"); if (descEl) descEl.textContent = yi.description || "";
+            const subEl = $("remix-og-subtitles"); if (subEl) subEl.textContent = yi.subtitles_text || "";
+        }
+
+        // Analysis
+        if (d.analysis) {
+            const el = $("remix-og-analysis");
+            if (el) el.textContent = d.analysis;
+        }
+
+        // Script (full state, not chunk)
+        if (Object.prototype.hasOwnProperty.call(d, "script") && d.script && d.step !== "rewrite") {
+            const el = $("remix-script-output");
+            if (el) {
+                el.value = d.script;
+                const lineEl = $("remix-script-lines");
+                if (lineEl) lineEl.textContent = toNumberedLines(d.script);
+            }
+        }
+
+        // Segments & prompts for Remix video tab
+        if (Array.isArray(d.segments) && d.segments.length > 0) {
+            const container = $("remix-tbl-body");
+            if (container) {
+                const prompts = Array.isArray(d.video_prompts) ? d.video_prompts : [];
+                container.innerHTML = d.segments.map((seg, i) => {
+                    const prompt = prompts[i] || "";
+                    return `<div class="tr"><div class="td c-chk"><input type="checkbox"></div><div class="td c-idx">${i + 1}</div><div class="td c-text">${esc(seg.text || "")}</div><div class="td c-text">${esc(prompt)}</div></div>`;
+                }).join("");
+            }
+        }
+        return;
+    }
+
+    // Default: Writer page
     autoSwitchTabForStep(d.step, isActive);
 
     $("btn-start").disabled = isActive;
@@ -1592,7 +1693,7 @@ async function manualSplit() {
         if (d.error) { log(`[split][manual] Không thể tách đoạn: ${d.error}`, "err"); return; }
         S.splSegments = d.segments;
         renderSplitResults(d.segments, d.summary);
-        log(`[split][manual] Hoàn tất tách đoạn | segments=${d.summary?.count ?? S.splSegments.length} | total_duration=${d.summary?.total_duration ?? "-" }s`, "ok");
+        log(`[split][manual] Hoàn tất tách đoạn | segments=${d.summary?.count ?? S.splSegments.length} | total_duration=${d.summary?.total_duration ?? "-"}s`, "ok");
     } catch (e) { log(`[split][manual] Lỗi kết nối khi tách đoạn: ${e.message || e}`, "err"); }
 }
 
@@ -1611,7 +1712,7 @@ async function aiSplit() {
         if (d.error) { log(`[split][ai] Không thể tách đoạn bằng AI: ${d.error}`, "err"); stats.innerHTML = `<span class="status-msg err">${esc(d.error)}</span>`; return; }
         S.splSegments = d.segments;
         renderSplitResults(d.segments, d.summary);
-        log(`[split][ai] Hoàn tất tách đoạn bằng AI | segments=${d.summary?.count ?? S.splSegments.length} | total_duration=${d.summary?.total_duration ?? "-" }s`, "ok");
+        log(`[split][ai] Hoàn tất tách đoạn bằng AI | segments=${d.summary?.count ?? S.splSegments.length} | total_duration=${d.summary?.total_duration ?? "-"}s`, "ok");
     } catch (e) { log(`[split][ai] Lỗi kết nối: ${e.message || e}`, "err"); stats.innerHTML = '<span class="status-msg err">AI Split failed</span>'; }
 }
 
@@ -2333,16 +2434,17 @@ function renderP2PShares() {
     const downloadedEl = $("p2p-downloaded-list");
     if (!createdEl || !downloadedEl) return;
     const shares = Array.isArray(S.p2p.shares) ? S.p2p.shares : [];
-    if (!shares.length) {
-        createdEl.innerHTML = '<div class="tbl-empty">Chưa có share nào</div>';
-        downloadedEl.innerHTML = '<div class="tbl-empty">Chưa tải file nào</div>';
-        return;
-    }
-    createdEl.innerHTML = shares.map(s => {
+    const createdShares = shares.filter(s => s.type !== "download");
+    const downloadedShares = shares
+        .filter(s => s.type === "download" || String(s.last_download_dir || "").trim())
+        .sort((a, b) => String(b.last_download_at || "").localeCompare(String(a.last_download_at || "")));
+
+    createdEl.innerHTML = createdShares.length ? createdShares.map(s => {
         const token = sanitizeP2PToken(s.token || "");
         const active = S.p2p.selectedToken === token;
         const createdAt = formatP2PDate(s.created_at);
         const updatedAt = formatP2PDate(s.updated_at);
+        const fCount = Number(s.file_count || (s.files || []).length || 0);
         return `
             <div class="p2p-share-card${active ? " active" : ""}">
                 <div class="p2p-share-top">
@@ -2353,30 +2455,28 @@ function renderP2PShares() {
                     </div>
                 </div>
                 <div class="p2p-share-meta">
-                    ${Number(s.file_count || 0)} file | ${formatP2PSize(s.total_size || 0)} | tạo: ${esc(createdAt)} | cập nhật: ${esc(updatedAt)}
+                    ${fCount} file | ${formatP2PSize(s.total_size || 0)} | tạo: ${esc(createdAt)} | cập nhật: ${esc(updatedAt)}
                 </div>
             </div>
         `;
-    }).join("");
-
-    const downloadedShares = shares
-        .filter(s => String(s.last_download_dir || "").trim())
-        .sort((a, b) => String(b.last_download_at || "").localeCompare(String(a.last_download_at || "")));
+    }).join("") : '<div class="tbl-empty">Chưa có share nào</div>';
 
     downloadedEl.innerHTML = downloadedShares.length ? downloadedShares.map(s => {
         const downloadPath = String(s.last_download_dir || "").trim();
         const lastDownloadAt = formatP2PDate(s.last_download_at);
+        const fCount = Number(s.file_count || (s.files || []).length || 0);
+        const safePath = encodeURIComponent(downloadPath);
         return `
             <div class="p2p-share-card">
                 <div class="p2p-share-top">
                     <div class="p2p-share-name">${esc(s.name || "(No name)")}</div>
                 </div>
                 <div class="p2p-share-meta">
-                    ${Number(s.file_count || 0)} file | ${formatP2PSize(s.total_size || 0)} | tải lần cuối: ${esc(lastDownloadAt)}
+                    ${fCount} file | ${formatP2PSize(s.total_size || 0)} | tải lần cuối: ${esc(lastDownloadAt)}
                 </div>
                 <div class="p2p-share-path">Đã lưu tại${downloadPath ? `<br>${esc(downloadPath)}` : ""}</div>
                 <div class="p2p-share-actions">
-                    <button class="btn sm primary" onclick="openP2PFolder('${esc(downloadPath)}')">Mở thư mục</button>
+                    <button class="btn sm primary" onclick="openP2PFolder(decodeURIComponent('${safePath}'))">Mở thư mục</button>
                 </div>
             </div>
         `;
@@ -2445,20 +2545,24 @@ const SAVE_BATCH = 1024 * 1024; // 1MB save batch to Flask
 function _genSessionId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 function _fmtSize(b) {
     if (b < 1024) return b + " B";
-    if (b < 1024*1024) return (b/1024).toFixed(1) + " KB";
-    if (b < 1024*1024*1024) return (b/1024/1024).toFixed(1) + " MB";
-    return (b/1024/1024/1024).toFixed(2) + " GB";
+    if (b < 1024 * 1024) return (b / 1024).toFixed(1) + " KB";
+    if (b < 1024 * 1024 * 1024) return (b / 1024 / 1024).toFixed(1) + " MB";
+    return (b / 1024 / 1024 / 1024).toFixed(2) + " GB";
 }
 function _fmtSpeed(bps) {
     if (bps < 1024) return bps.toFixed(0) + " B/s";
-    if (bps < 1024*1024) return (bps/1024).toFixed(1) + " KB/s";
-    return (bps/1024/1024).toFixed(1) + " MB/s";
+    if (bps < 1024 * 1024) return (bps / 1024).toFixed(1) + " KB/s";
+    return (bps / 1024 / 1024).toFixed(1) + " MB/s";
 }
 function _makePeerConfig() {
-    return { config: { iceServers: [
-        { urls: "stun:stun.l.google.com:19302" },
-        { urls: "stun:stun1.l.google.com:19302" },
-    ]}};
+    return {
+        config: {
+            iceServers: [
+                { urls: "stun:stun.l.google.com:19302" },
+                { urls: "stun:stun1.l.google.com:19302" },
+            ]
+        }
+    };
 }
 
 // ── Combined share + connect (sender) ──
@@ -2506,26 +2610,35 @@ async function p2pShareAndConnect() {
             log(`[p2p][webrtc] Có người kết nối: ${conn.peer}`);
             _webrtc.conn = conn;
             if (statusEl) statusEl.textContent = "Đang gửi file...";
+            let senderFilesDone = 0, senderTotalFiles = 0;
             conn.on("open", () => {
                 conn.on("data", async (msg) => {
                     if (typeof msg === "object" && msg.type === "request-meta") {
                         try {
                             const r2 = await fetch(`/api/p2p/share-meta/${encodeURIComponent(_webrtc.token)}`);
                             const meta = await r2.json();
+                            senderTotalFiles = (meta.files || []).length;
                             conn.send({ type: "meta", data: meta });
                         } catch (e2) {
                             conn.send({ type: "error", message: "Không thể đọc metadata" });
                         }
                     } else if (typeof msg === "object" && msg.type === "request-file") {
+                        if (statusEl) statusEl.textContent = `Đang gửi ${++senderFilesDone}/${senderTotalFiles}: ${msg.rel_path}`;
                         await _webrtcSendFile(conn, _webrtc.token, msg.rel_path, msg.size || 0);
+                        if (senderFilesDone >= senderTotalFiles && statusEl) statusEl.textContent = `Hoàn tất! Đã gửi ${senderTotalFiles} file.`;
                     }
                 });
+            });
+            conn.on("close", () => {
+                if (statusEl) statusEl.textContent = senderFilesDone >= senderTotalFiles ? `Hoàn tất! Đã gửi ${senderTotalFiles} file.` : "Người nhận đã ngắt kết nối.";
+                if (btn) { btn.disabled = false; btn.textContent = "Chia sẻ"; }
             });
         });
 
         _webrtc.peer.on("error", (err) => {
             if (statusEl) statusEl.textContent = "Lỗi: " + err.type;
             log(`[p2p][webrtc] Lỗi: ${err.type}`, "err");
+            if (btn) { btn.disabled = false; btn.textContent = "Chia sẻ"; }
         });
     } catch (e) {
         log(`[p2p][webrtc] Lỗi khởi tạo: ${e.message}`, "err");
@@ -2652,7 +2765,7 @@ function webrtcPause() {
     _webrtc.paused = true;
     const btn = $("btn-webrtc-pause");
     if (btn) { btn.textContent = "▶ Tiếp tục"; btn.onclick = webrtcResume; }
-    $("p2p-webrtc-status").textContent = "Đã tạm dừng.";
+    const st = $("p2p-webrtc-status"); if (st) st.textContent = "Đã tạm dừng.";
 }
 function webrtcResume() {
     _webrtc.paused = false;
@@ -2661,9 +2774,9 @@ function webrtcResume() {
 }
 function webrtcCancel() {
     _webrtc.cancelled = true; _webrtc.paused = false;
-    if (_webrtc.conn) try { _webrtc.conn.close(); } catch(_){}
+    if (_webrtc.conn) try { _webrtc.conn.close(); } catch (_) { }
     if (_webrtc.peer) { _webrtc.peer.destroy(); _webrtc.peer = null; }
-    $("p2p-webrtc-status").textContent = "Đã huỷ.";
+    const st = $("p2p-webrtc-status"); if (st) st.textContent = "Đã huỷ.";
     const cw = $("p2p-webrtc-controls");
     if (cw) { cw.classList.add("hidden"); cw.style.display = "none"; }
 }
@@ -2771,7 +2884,7 @@ async function _webrtcFinalize() {
     if (cw) { cw.classList.add("hidden"); cw.style.display = "none"; }
     if (_webrtc.peer) { _webrtc.peer.destroy(); _webrtc.peer = null; }
     // Refresh download list
-    try { await loadP2PShares(); } catch(_) {}
+    try { await loadP2PShares(); } catch (_) { }
 }
 
 
@@ -3185,7 +3298,7 @@ function clearLog() { $("log-body").innerHTML = ""; }
             }
             if (d.error || !d.has_update) return;
             showUpdateBanner(d);
-        } catch (_) {}
+        } catch (_) { }
     }
 
     function showUpdateBanner(info) {
@@ -3229,7 +3342,7 @@ async function applyUpdate(btn) {
             log("[update] Đã cập nhật. Đang đóng ứng dụng cũ...", "ok");
             // Auto-close after 3s — triggers AutoStudio.vbs cleanup
             setTimeout(() => {
-                try { window.close(); } catch(_) {}
+                try { window.close(); } catch (_) { }
                 // Fallback if window.close() blocked
                 if (banner) banner.querySelector(".update-text").innerHTML =
                     "Phiên bản mới đã khởi động.<br><strong>Vui lòng đóng tab này.</strong>";
@@ -3241,5 +3354,188 @@ async function applyUpdate(btn) {
     } catch (e) {
         if (btn) { btn.disabled = false; btn.textContent = "Cập nhật"; }
         log("[update] Lỗi: " + e.message, "err");
+    }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// YouTube Remix
+// ═══════════════════════════════════════════════════════════════════════════
+let _ytData = null;
+
+function switchRemixTab(tabId) {
+    const tabs = document.querySelectorAll("#page-remix .tab");
+    const panes = document.querySelectorAll("#page-remix .tab-pane");
+    tabs.forEach(t => t.classList.toggle("active", t.dataset.tab === tabId));
+    panes.forEach(p => p.classList.toggle("active", p.id === "tab-" + tabId));
+}
+
+async function extractYouTube() {
+    const inp = $("inp-yt-url");
+    const btn = $("btn-yt-extract");
+    const url = inp ? inp.value.trim() : "";
+    if (!url) { log("[youtube] Vui lòng nhập URL YouTube.", "warn"); return; }
+
+    if (btn) { btn.disabled = true; btn.textContent = "Đang trích xuất..."; }
+    log(`[youtube] Đang trích xuất: ${url}...`);
+
+    try {
+        const r = await fetch("/api/youtube/extract", {
+            method: "POST",
+            headers: CT_JSON,
+            body: JSON.stringify({ url }),
+        });
+        const d = await r.json();
+        if (!d.ok) {
+            log("[youtube] Lỗi: " + (d.error || ""), "err");
+            if (btn) { btn.disabled = false; btn.textContent = "Trích xuất"; }
+            return;
+        }
+
+        _ytData = d;
+
+        // Populate Original Content tab
+        const emptyEl = $("remix-original-empty");
+        const contentEl = $("remix-original-content");
+        if (emptyEl) emptyEl.classList.add("hidden");
+        if (contentEl) contentEl.classList.remove("hidden");
+
+        const titleEl = $("remix-og-title");
+        const metaEl = $("remix-og-meta");
+        const subEl = $("remix-og-subtitles");
+
+        if (titleEl) titleEl.textContent = d.title || "(Không có tiêu đề)";
+
+        // Populate individual metadata fields
+        const dur = d.duration ? Math.floor(d.duration / 60) + ":" + String(d.duration % 60).padStart(2, "0") : "?";
+        const dateEl = $("remix-og-date"); if (dateEl) dateEl.textContent = _formatYTDate(d.upload_date);
+        const viewsEl = $("remix-og-views"); if (viewsEl) viewsEl.textContent = (d.view_count || 0).toLocaleString() + " views";
+        const chanEl = $("remix-og-channel"); if (chanEl) chanEl.textContent = d.channel || "—";
+        const durEl = $("remix-og-duration"); if (durEl) durEl.textContent = dur;
+
+        // Tags inline
+        const tagsEl = $("remix-og-tags");
+        if (tagsEl) {
+            const tags = Array.isArray(d.tags) ? d.tags : [];
+            tagsEl.textContent = tags.length ? tags.join(", ") : "Không có từ khoá";
+        }
+
+        // Description
+        const descEl = $("remix-og-desc");
+        if (descEl) descEl.textContent = d.description || "(Không có mô tả)";
+
+        // Subtitles
+        if (subEl) {
+            subEl.textContent = d.subtitles_text || "(Không có subtitle)";
+        }
+
+        // Auto switch to Original Content tab
+        switchRemixTab("remix-original");
+
+        log(`[youtube] Trích xuất thành công: "${d.title}" | ${d.subtitles_text ? d.subtitles_text.length + " ký tự subtitle" : "không có subtitle, dùng mô tả"}`, "ok");
+    } catch (e) {
+        log("[youtube] Lỗi: " + e.message, "err");
+    }
+    if (btn) { btn.disabled = false; btn.textContent = "Trích xuất"; }
+}
+
+function _formatYTDate(raw) {
+    if (!raw || raw.length < 8) return raw || "—";
+    return raw.slice(0, 4) + "-" + raw.slice(4, 6) + "-" + raw.slice(6, 8);
+}
+
+async function startRewritePipeline() {
+    const ytUrl = ($("inp-yt-url")?.value || "").trim();
+    if (!ytUrl) {
+        log("[rewrite] Vui lòng nhập URL YouTube.", "warn");
+        return;
+    }
+    if (S.running) {
+        log("[rewrite] Pipeline đang chạy.", "warn");
+        return;
+    }
+
+    const body = {
+        youtube_url: ytUrl,
+        youtube_data: _ytData && _ytData.ok ? _ytData : null,
+        target_language: $("sel-remix-lang")?.value || "English",
+        video_style_name: $("sel-remix-vstyle")?.value || $("sel-vstyle")?.value || "",
+        model: $("sel-remix-model")?.value || $("sel-model")?.value || "",
+        model_analyze: $("sel-remix-model-analyze")?.value || $("sel-remix-model")?.value || "",
+        model_video: $("sel-remix-model-video")?.value || $("sel-model-video")?.value || "",
+    };
+
+    // Show progress
+    const pa = $("remix-progress-area"); if (pa) pa.classList.remove("hidden");
+    const btnStart = $("btn-remix-start"); if (btnStart) btnStart.disabled = true;
+    const btnPause = $("btn-remix-pause"); if (btnPause) btnPause.disabled = false;
+    const btnStop = $("btn-remix-stop"); if (btnStop) btnStop.disabled = false;
+
+    // Clear previous output
+    const scriptOut = $("remix-script-output"); if (scriptOut) scriptOut.value = "";
+    const tblBody = $("remix-tbl-body"); if (tblBody) tblBody.innerHTML = '<div class="tbl-empty">Chưa có dữ liệu</div>';
+
+    try {
+        const r = await fetch("/api/pipeline/rewrite", {
+            method: "POST",
+            headers: CT_JSON,
+            body: JSON.stringify(body),
+        });
+        const d = await r.json();
+        if (d.ok) {
+            log(`[rewrite] Bắt đầu pipeline remix...`, "ok");
+        } else {
+            log("[rewrite] Lỗi: " + (d.error || ""), "err");
+            if (btnStart) btnStart.disabled = false;
+        }
+    } catch (e) {
+        log("[rewrite] Lỗi: " + e.message, "err");
+        if (btnStart) btnStart.disabled = false;
+    }
+}
+
+async function runRemixStep(step) {
+    if (S.running) {
+        log("[rewrite] Pipeline đang chạy.", "warn");
+        return;
+    }
+    const ytUrl = ($("inp-yt-url")?.value || "").trim();
+    if (!ytUrl && step === "extract") {
+        log("[rewrite] Vui lòng nhập URL YouTube.", "warn");
+        return;
+    }
+
+    const body = {
+        youtube_url: ytUrl,
+        youtube_data: _ytData && _ytData.ok ? _ytData : null,
+        target_language: $("sel-remix-lang")?.value || "English",
+        video_style_name: $("sel-remix-vstyle")?.value || "",
+        model: $("sel-remix-model")?.value || "",
+        model_analyze: $("sel-remix-model-analyze")?.value || "",
+        model_video: $("sel-remix-model-video")?.value || "",
+        start_step: step,
+        _original_text: _ytData?.subtitles_text || _ytData?.description || "",
+        _video_title: _ytData?.title || "",
+    };
+
+    // Pass existing content/segments for later steps
+    const scriptOut = $("remix-script-output");
+    if (step === "split" || step === "video") {
+        body._script = scriptOut?.value || "";
+    }
+
+    const pa = $("remix-progress-area"); if (pa) pa.classList.remove("hidden");
+    log(`[rewrite] Chạy bước: ${step}...`);
+
+    try {
+        const r = await fetch("/api/pipeline/rewrite", {
+            method: "POST",
+            headers: CT_JSON,
+            body: JSON.stringify(body),
+        });
+        const d = await r.json();
+        if (!d.ok) log("[rewrite] Lỗi: " + (d.error || ""), "err");
+    } catch (e) {
+        log("[rewrite] Lỗi: " + e.message, "err");
     }
 }

@@ -28,12 +28,13 @@ from flask import Flask, request, jsonify, Response, send_from_directory
 
 from core.ai_splitter import fetch_models, split_content_ai
 from core.splitter import split_content, get_summary
-from core.content_writer import write_content
+from core.content_writer import write_content, analyze_content, rewrite_content
+from core.youtube_extractor import extract_youtube_info
 from core.video_prompter import generate_video_prompts, generate_video_prompt_single
 from core.project_manager import (
     save_project_incremental, load_project,
     list_projects, create_project_dir, get_project_dir_by_id,
-    set_output_root, delete_project,
+    set_output_root, delete_project, get_p2p_dir,
 )
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -538,10 +539,7 @@ def _normalize_config_paths(cfg: dict | None = None, persist: bool = False) -> d
     current = dict(cfg) if isinstance(cfg, dict) else _load_config()
     output_dir = _normalize_dir_path(current.get("output_dir", ""), os.path.join(BASE_DIR, "output"))
     current["output_dir"] = set_output_root(output_dir)
-    current["p2p_download_dir"] = _normalize_dir_path(
-        current.get("p2p_download_dir", ""),
-        os.path.join(current["output_dir"], "P2P_Downloads"),
-    )
+    current["p2p_download_dir"] = get_p2p_dir()
     if persist:
         _write_config_file(current)
     return current
@@ -555,17 +553,8 @@ def _save_config(updates: dict):
     return current
 
 
-def _default_p2p_download_dir(cfg: dict | None = None) -> str:
-    current = dict(cfg) if isinstance(cfg, dict) else _normalize_config_paths()
-    output_dir = str(current.get("output_dir", "")).strip()
-    root_dir = output_dir or os.path.join(BASE_DIR, "output")
-    return os.path.join(root_dir, "P2P_Downloads")
-
-
 def _get_p2p_download_dir(cfg: dict | None = None) -> str:
-    current = dict(cfg) if isinstance(cfg, dict) else _normalize_config_paths()
-    configured = str(current.get("p2p_download_dir", "")).strip()
-    return configured or _default_p2p_download_dir(current)
+    return get_p2p_dir()
 
 
 def _public_config(cfg: dict) -> dict:
@@ -959,7 +948,8 @@ def _broadcast_state(force: bool = False):
 
 def _broadcast_script_chunk(chunk: str):
     """Send incremental script chunk (lightweight, no full state)."""
-    _broadcast({"type": "script_chunk", "chunk": chunk})
+    source = _pipeline_state.get("source", "writer")
+    _broadcast({"type": "script_chunk", "chunk": chunk, "source": source})
 
 
 def _segment_tolerance(target_seconds: float) -> float:
@@ -1195,6 +1185,238 @@ def sse_events():
 # ROUTES — Pipeline
 # ══════════════════════════════════════════════════════════════════════════════
 
+@app.route("/api/youtube/extract", methods=["POST"])
+def api_youtube_extract():
+    """Extract subtitle, title, description from YouTube URL."""
+    body = request.get_json(force=True) or {}
+    url = str(body.get("url", "")).strip()
+    if not url:
+        return jsonify({"error": "URL is required"}), 400
+
+    try:
+        result = extract_youtube_info(
+            url=url,
+            log_fn=_broadcast_log,
+        )
+        return jsonify(result)
+    except ImportError as e:
+        return jsonify({"error": str(e)}), 500
+    except Exception as e:
+        _broadcast_log(f"[youtube] Lỗi: {e}")
+        return jsonify({"error": str(e)[:300]}), 500
+
+
+@app.route("/api/pipeline/rewrite", methods=["POST"])
+def api_pipeline_rewrite():
+    """Full rewrite pipeline: extract/use YT → analyze → rewrite → split → video prompt."""
+    if _pipeline_state.get("running"):
+        return jsonify({"error": "Pipeline đang chạy"}), 409
+    body = request.get_json(force=True) or {}
+    threading.Thread(
+        target=_run_rewrite_pipeline, args=(body,), daemon=True
+    ).start()
+    return jsonify({"ok": True})
+
+
+def _run_rewrite_pipeline(params: dict):
+    """Background task: extract → count → analyze → rewrite → split → video prompt."""
+    global _cancel_flag
+
+    cfg = _load_config()
+    yt_url = params.get("youtube_url", "").strip()
+    yt_data = params.get("youtube_data")  # pre-extracted data
+    video_style_name = params.get("video_style_name", "")
+    target_language = _normalize_language(params.get("target_language") or params.get("language"))
+    model_script = params.get("model", cfg.get("model", ""))
+    model_analyze = params.get("model_analyze", model_script)
+    model_video = params.get("model_video", cfg.get("model_video", model_script))
+    endpoint = cfg.get("endpoint", "")
+    api_key = cfg.get("api_key", "")
+    wpm = cfg.get("wpm", 130)
+    target_seconds = cfg.get("target_seconds", 8.0)
+    start_step = params.get("start_step")  # None = full pipeline, str = single step
+
+    video_styles = _load_json(VIDEO_STYLES_PATH)
+    vstyle = next((s for s in video_styles if s.get("name") == video_style_name), None)
+    video_style_prompt = vstyle.get("prompt", "") if vstyle else ""
+
+    proj_dir, proj_name, project_id = create_project_dir(source="remix")
+
+    with _state_lock:
+        _pipeline_state.update({
+            "running": True, "paused": False, "step": start_step,
+            "progress": 0, "total": 6, "error": "",
+            "script": "", "segments": [], "video_prompts": [],
+            "proj_dir": proj_dir, "project_id": project_id,
+            "source": "remix",
+        })
+    _broadcast_state(force=True)
+
+    def _check_cancel_pause():
+        while _pipeline_state.get("paused") and not _cancel_flag:
+            time.sleep(0.3)
+        return _cancel_flag
+
+    try:
+        # Use existing data from params if running from a later step
+        original_text = params.get("_original_text", "")
+        video_title = params.get("_video_title", "")
+        original_char_count = params.get("_original_char_count", 0)
+        analysis = params.get("_analysis", "")
+        script = params.get("_script", "")
+        segments = params.get("_segments", [])
+        run_all = start_step is None  # full pipeline vs single step
+
+        # Always ensure we have original_text (extract data from yt if needed)
+        if not original_text:
+            _broadcast_log("[rewrite] Trích xuất thông tin video...")
+            if yt_data and yt_data.get("ok"):
+                info = yt_data
+            elif yt_url:
+                info = extract_youtube_info(url=yt_url, log_fn=_broadcast_log)
+                if not info.get("ok"):
+                    raise RuntimeError(info.get("error", "Không thể trích xuất video"))
+            else:
+                raise RuntimeError("Cần URL YouTube hoặc dữ liệu video")
+            original_text = info.get("subtitles_text", "") or info.get("description", "")
+            video_title = info.get("title", "")
+
+            # Broadcast extracted info to populate Content Gốc tab
+            with _state_lock:
+                _pipeline_state["youtube_info"] = {
+                    "title": video_title,
+                    "upload_date": info.get("upload_date", ""),
+                    "view_count": info.get("view_count", 0),
+                    "channel": info.get("channel", ""),
+                    "duration": info.get("duration", 0),
+                    "tags": info.get("tags", []),
+                    "description": info.get("description", ""),
+                    "subtitles_text": info.get("subtitles_text", ""),
+                }
+            _broadcast_state(force=True)
+
+            if run_all:
+                topic = f"[Remix] {video_title}"
+                save_project_incremental(proj_dir, topic=topic,
+                    video_style_name=video_style_name, model_name=model_script,
+                    model_video=model_video, language=target_language, project_id=project_id, status="in_progress")
+
+        # Step: Count characters
+        if run_all or start_step == "analyze":
+            original_char_count = len(original_text)
+            word_count = len(original_text.split())
+            _broadcast_log(f"[rewrite] Đếm ký tự → {original_char_count:,} ký tự, {word_count:,} từ")
+            with _state_lock:
+                _pipeline_state["step"] = "count"
+                _pipeline_state["progress"] = 1
+                _pipeline_state["original_char_count"] = original_char_count
+                _pipeline_state["word_count"] = word_count
+            _broadcast_state(force=True)
+
+        # Step: Analyze content
+        if run_all or start_step == "analyze":
+            with _state_lock:
+                _pipeline_state["step"] = "analyze"
+                _pipeline_state["progress"] = 2
+            _broadcast_state(force=True)
+            _broadcast_log("[rewrite] Phân tích nội dung gốc...")
+            if _check_cancel_pause():
+                raise InterruptedError("Cancelled")
+            analysis = analyze_content(
+                original_text=original_text,
+                video_title=video_title,
+                video_description=yt_data.get("description", "") if yt_data else "",
+                model_name=model_analyze, endpoint=endpoint, api_key=api_key,
+                log_fn=_broadcast_log, cancel_check=_check_cancel_pause,
+            )
+            _broadcast_log(f"[rewrite] Phân tích xong: {len(analysis)} ký tự")
+            with _state_lock:
+                _pipeline_state["analysis"] = analysis
+                _pipeline_state["progress"] = 3
+            _broadcast_state(force=True)
+
+        # Step: Rewrite content
+        if run_all or start_step == "rewrite":
+            if not original_char_count:
+                original_char_count = len(original_text)
+            with _state_lock:
+                _pipeline_state["step"] = "rewrite"
+                _pipeline_state["progress"] = 3
+            _broadcast_state(force=True)
+            _broadcast_log(f"[rewrite] Viết lại content bằng {target_language} (target ~{original_char_count:,} ký tự)...")
+            if _check_cancel_pause():
+                raise InterruptedError("Cancelled")
+            script = rewrite_content(
+                original_text=original_text, analysis=analysis, video_title=video_title,
+                target_language=target_language, style=None, model_name=model_script,
+                endpoint=endpoint, api_key=api_key, wpm=wpm, target_sec=target_seconds,
+                duration_minutes=0, original_char_count=original_char_count,
+                on_token=lambda t: _broadcast_script_chunk(t),
+                log_fn=_broadcast_log, cancel_check=_check_cancel_pause,
+            )
+            with _state_lock:
+                _pipeline_state["script"] = script
+            save_project_incremental(proj_dir, script=script)
+            _broadcast_log(f"[rewrite] Viết xong: {len(script)} ký tự (gốc: {original_char_count:,})")
+
+        # Step: Split segments
+        if run_all or start_step == "split":
+            if not script:
+                script = _pipeline_state.get("script", "")
+            with _state_lock:
+                _pipeline_state["step"] = "split"
+                _pipeline_state["progress"] = 4
+            _broadcast_state(force=True)
+            _broadcast_log("[rewrite] Tách segment...")
+            if _check_cancel_pause():
+                raise InterruptedError("Cancelled")
+            segments, seg_summary = _split_segments_from_script(script, wpm=wpm, target_seconds=target_seconds)
+            with _state_lock:
+                _pipeline_state["segments"] = segments
+            save_project_incremental(proj_dir, segments=segments)
+            _broadcast_log(f"[rewrite] Tách xong: {seg_summary.get('count', len(segments))} segments")
+            _broadcast_state(force=True)
+
+        # Step: Video prompts
+        if run_all or start_step == "video":
+            if not segments:
+                segments = _pipeline_state.get("segments", [])
+            with _state_lock:
+                _pipeline_state["step"] = "video"
+                _pipeline_state["progress"] = 5
+            _broadcast_state(force=True)
+            _broadcast_log("[rewrite] Tạo video prompt...")
+            if _check_cancel_pause():
+                raise InterruptedError("Cancelled")
+            prompts = generate_video_prompts(
+                segments, model_name=model_video, endpoint=endpoint, api_key=api_key,
+                video_style=video_style_prompt, log_fn=_broadcast_log,
+                cancel_check=_check_cancel_pause,
+            )
+            with _state_lock:
+                _pipeline_state["video_prompts"] = prompts
+            save_project_incremental(proj_dir, video_prompts=prompts, status="completed")
+            _broadcast_log(f"[rewrite] Hoàn tất! {len(segments)} segments, {len(prompts)} prompts")
+            _broadcast_state(force=True)
+
+        with _state_lock:
+            _pipeline_state.update({"running": False, "step": "done", "progress": 6})
+        _broadcast_state(force=True)
+
+    except InterruptedError:
+        with _state_lock:
+            _pipeline_state.update({"running": False, "step": "cancelled"})
+        _broadcast_log("[rewrite] Đã hủy.")
+        _broadcast_state(force=True)
+    except Exception as e:
+        with _state_lock:
+            _pipeline_state.update({"running": False, "step": "error", "error": str(e)[:300]})
+        _broadcast_log(f"[rewrite] Lỗi: {e}")
+        _broadcast_state(force=True)
+    finally:
+        _cancel_flag = False
+
+
 @app.route("/api/pipeline/start", methods=["POST"])
 def pipeline_start():
     global _cancel_flag
@@ -1288,6 +1510,7 @@ def _run_pipeline(params: dict):
             "progress": 0, "total": 3, "error": "",
             "script": "", "segments": [], "video_prompts": [],
             "proj_dir": proj_dir, "project_id": project_id,
+            "source": "writer",
         })
     _broadcast_state(force=True)
     _broadcast_log(
@@ -2115,9 +2338,8 @@ def pick_output_dir():
 @app.route("/api/p2p-download-dir", methods=["GET"])
 def get_p2p_download_dir():
     cfg = _normalize_config_paths()
-    default_dir = _default_p2p_download_dir(cfg)
-    current_dir = str(cfg.get("p2p_download_dir", "")).strip() or default_dir
-    return jsonify({"p2p_download_dir": current_dir, "default": default_dir})
+    p2p_dir = get_p2p_dir()
+    return jsonify({"p2p_download_dir": p2p_dir, "default": p2p_dir})
 
 
 @app.route("/api/p2p-download-dir", methods=["POST"])

@@ -248,3 +248,273 @@ YÊU CẦU BẮT BUỘC VỀ ĐỊNH DẠNG OUTPUT:
     )
 
     return content
+
+
+def _stream_chat(
+    endpoint: str,
+    api_key: str,
+    model_name: str,
+    system_prompt: str,
+    user_prompt: str,
+    on_token=None,
+    log_fn=None,
+    cancel_check=None,
+    tag: str = "chat",
+) -> str:
+    """Shared streaming chat completion with retry logic."""
+    import json as _json
+
+    _log = log_fn or (lambda m: None)
+    base = endpoint.rstrip("/")
+    if not base.endswith("/v1"):
+        base += "/v1"
+    url = f"{base}/chat/completions"
+
+    headers = {"Content-Type": "application/json"}
+    if api_key and api_key.strip():
+        headers["Authorization"] = f"Bearer {api_key.strip()}"
+
+    payload = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.7,
+        "stream": True,
+    }
+
+    _log(f"[api][{tag}] request POST {url} model={model_name}")
+    session = _get_session()
+    last_err = None
+    resp = None
+    attempt = 0
+    rate_limit_retries = 0
+    max_rate_retries = 10
+    start = time.time()
+
+    while attempt < MAX_RETRIES:
+        try:
+            if cancel_check and cancel_check():
+                raise InterruptedError("Cancelled")
+            attempt += 1
+            start = time.time()
+            resp = session.post(url, json=payload, headers=headers, timeout=(15, 120), stream=True)
+            elapsed = round(time.time() - start, 1)
+            _log(f"[api][{tag}] attempt={attempt} status={resp.status_code} elapsed={elapsed}s")
+
+            if resp.status_code == 429:
+                rate_limit_retries += 1
+                attempt -= 1
+                if rate_limit_retries > max_rate_retries:
+                    raise RuntimeError("Rate limit: too many retries (429)")
+                wait = 2
+                try:
+                    err_data = _json.loads(resp.text)
+                    details = err_data.get("error", {}).get("details", [])
+                    for d in details:
+                        if "retryDelay" in d:
+                            delay_str = str(d["retryDelay"])
+                            wait = max(1, int(float(delay_str.rstrip("s")) + 1))
+                            break
+                except Exception:
+                    pass
+                _log(f"[api][{tag}] rate_limit wait={wait}s")
+                time.sleep(wait)
+                continue
+            if resp.status_code >= 500:
+                last_err = f"Server {resp.status_code}"
+                if attempt < MAX_RETRIES:
+                    time.sleep(RETRY_DELAY * attempt)
+                continue
+            resp.raise_for_status()
+            break
+        except requests.exceptions.ConnectionError as e:
+            last_err = f"Connection error: {e}"
+            _log(f"[api][{tag}] connection_error: {str(e)[:120]}")
+            if attempt < MAX_RETRIES:
+                time.sleep(RETRY_DELAY * attempt)
+            continue
+        except requests.exceptions.HTTPError:
+            status = resp.status_code if resp is not None else "unknown"
+            raise RuntimeError(f"Server returned HTTP {status}")
+    else:
+        raise RuntimeError(f"Failed after {MAX_RETRIES} retries: {last_err}")
+
+    resp.encoding = "utf-8"
+    content_parts = []
+    for line in resp.iter_lines(decode_unicode=True):
+        if cancel_check and cancel_check():
+            session.close()
+            raise InterruptedError("Cancelled")
+        if not line or not line.startswith("data: "):
+            continue
+        data_str = line[6:]
+        if data_str.strip() == "[DONE]":
+            break
+        try:
+            chunk = _json.loads(data_str)
+            delta = chunk.get("choices", [{}])[0].get("delta", {})
+            token = delta.get("content", "")
+            if token:
+                content_parts.append(token)
+                if on_token:
+                    on_token(token)
+        except (_json.JSONDecodeError, IndexError, KeyError):
+            continue
+
+    session.close()
+    content = "".join(content_parts).strip()
+    elapsed = round(time.time() - start, 1)
+    _log(f"[api][{tag}] done elapsed={elapsed}s chars={len(content)}")
+    return content
+
+
+def analyze_content(
+    original_text: str,
+    video_title: str = "",
+    video_description: str = "",
+    model_name: str = "",
+    endpoint: str = "",
+    api_key: str = "",
+    log_fn=None,
+    cancel_check=None,
+) -> str:
+    """Analyze competitor content: structure, hooks, tone, key points."""
+    _log = log_fn or (lambda m: None)
+    _log("[analyze] Đang phân tích nội dung gốc...")
+
+    source_parts = []
+    if video_title:
+        source_parts.append(f"TIÊU ĐỀ VIDEO: {video_title}")
+    if video_description:
+        desc_trimmed = video_description[:2000]
+        source_parts.append(f"MÔ TẢ VIDEO:\n{desc_trimmed}")
+    if original_text:
+        source_parts.append(f"NỘI DUNG SUBTITLE/SCRIPT:\n{original_text}")
+
+    source = "\n\n".join(source_parts)
+
+    system_prompt = """Bạn là chuyên gia phân tích nội dung video YouTube.
+Phân tích nội dung dưới đây và trả lời chính xác từng câu hỏi:
+
+1. SỐ TỪ: Ước lượng tổng số từ của nội dung
+2. CHỦ ĐỀ THẬT SỰ: Chủ đề cốt lõi là gì? (1-2 câu)
+3. GÓC KHAI THÁC: Tác giả tiếp cận vấn đề từ góc nào?
+4. LUẬN ĐIỂM: Tác giả muốn chứng minh điều gì?
+5. HOOK: Hook mở đầu có gì hay? Phân tích cụ thể
+6. BỐ CỤC: Content đi theo logic nào? (liệt kê các phần)
+7. GIỌNG VĂN: Giọng văn thuộc kiểu gì? (trang trọng/hài hước/kể chuyện/...)
+8. INSIGHT ĐẮT NHẤT: Insight giá trị nhất trong content là gì?
+9. CẢI THIỆN: Mình có thể làm tốt hơn ở điểm nào?
+
+Trả lời mỗi câu ngắn gọn 1-3 câu. Dùng đúng số thứ tự 1-9 như trên."""
+
+    return _stream_chat(
+        endpoint=endpoint,
+        api_key=api_key,
+        model_name=model_name,
+        system_prompt=system_prompt,
+        user_prompt=f"Phân tích nội dung video này:\n\n{source}",
+        log_fn=log_fn,
+        cancel_check=cancel_check,
+        tag="analyze",
+    )
+
+
+def rewrite_content(
+    original_text: str,
+    analysis: str,
+    video_title: str = "",
+    target_language: str = "Tiếng Việt",
+    style: dict = None,
+    model_name: str = "",
+    endpoint: str = "",
+    api_key: str = "",
+    wpm: int = 130,
+    target_sec: float = 8.0,
+    duration_minutes: float = 0,
+    original_char_count: int = 0,
+    on_token=None,
+    log_fn=None,
+    cancel_check=None,
+) -> str:
+    """Rewrite content creatively in target language based on analysis."""
+    _log = log_fn or (lambda m: None)
+    style = style or {}
+    style_name = style.get("name", "General")
+    style_prompt = style.get("prompt", "")
+
+    words_per_sent = round((wpm / 60.0) * target_sec)
+    cpw = _chars_per_word(target_language)
+    chars_per_sent_est = max(1, int(words_per_sent * cpw))
+    chars_per_sent_min, chars_per_sent_max = _char_range(chars_per_sent_est, ratio=0.2)
+
+    if original_char_count > 0:
+        # Use exact Python char count from original content
+        total_chars_min, total_chars_max = _char_range(original_char_count, ratio=0.15)
+        est_words = max(1, int(original_char_count / cpw))
+        est_sents = max(1, int(est_words / words_per_sent)) if words_per_sent > 0 else 50
+        length_req = f"""
+YÊU CẦU VỀ ĐỘ DÀI (QUAN TRỌNG - BẮT BUỘC):
+- Content gốc có {original_char_count:,} ký tự → Bạn PHẢI viết tương đương
+- Khoảng {est_words:,} từ, khoảng {est_sents} câu/đoạn
+- Tổng ký tự output cho phép: {total_chars_min:,} - {total_chars_max:,} ký tự
+- KHÔNG ĐƯỢC viết ngắn hơn {total_chars_min:,} ký tự. Nếu thiếu, HÃY phát triển thêm ý."""
+    elif duration_minutes > 0:
+        total_words = int(duration_minutes * wpm)
+        total_sents = int(duration_minutes * 60 / target_sec)
+        total_chars_est = max(1, int(total_words * cpw))
+        total_chars_min, total_chars_max = _char_range(total_chars_est, ratio=0.15)
+        length_req = f"""
+YÊU CẦU VỀ ĐỘ DÀI:
+- Content dài {duration_minutes} phút
+- Khoảng {total_words:,} từ, khoảng {total_sents} câu
+- Ước lượng khoảng {total_chars_est:,} ký tự (cho phép ~{total_chars_min:,}-{total_chars_max:,} ký tự)"""
+    else:
+        length_req = "\n- Viết tối thiểu 20 câu"
+
+    system_prompt = f"""Bạn là người viết lại nội dung content sáng tạo, chuyên nghiệp.
+
+NHIỆM VỤ: Viết lại nội dung dựa trên phân tích video đối thủ.
+- KHÔNG copy nguyên văn, phải viết lại hoàn toàn sáng tạo hơn
+- Giữ lại ý tưởng hay nhưng thêm góc nhìn mới, thú vị hơn
+- Hook mạnh hơn, CTA rõ ràng hơn
+
+NGÔN NGỮ: Viết toàn bộ bằng {target_language}.
+
+Style content: {style_name}
+Hướng dẫn style:
+{style_prompt}
+
+YÊU CẦU BẮT BUỘC VỀ ĐỊNH DẠNG OUTPUT:
+1. Mỗi câu/đoạn khoảng {words_per_sent} từ (~{target_sec}s khi đọc ở {wpm} từ/phút)
+2. Mỗi câu/đoạn khoảng {chars_per_sent_est} ký tự (cho phép ~{chars_per_sent_min}-{chars_per_sent_max} ký tự)
+3. Mỗi câu phải xuống dòng (1 dòng/câu)
+4. Không dùng markdown, heading, bullet
+5. Không mở đầu kiểu "Dưới đây là..."
+{length_req}"""
+
+    user_prompt = f"""TIÊU ĐỀ VIDEO GỐC: {video_title}
+
+PHÂN TÍCH NỘI DUNG GỐC:
+{analysis}
+
+NỘI DUNG GỐC (để tham khảo ý tưởng):
+{original_text[:8000]}
+
+Hãy viết lại content hoàn toàn mới bằng {target_language}, sáng tạo hơn, hấp dẫn hơn."""
+
+    _log(f"[rewrite] Đang viết lại content bằng {target_language} (target ~{original_char_count:,} ký tự)...")
+    return _stream_chat(
+        endpoint=endpoint,
+        api_key=api_key,
+        model_name=model_name,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        on_token=on_token,
+        log_fn=log_fn,
+        cancel_check=cancel_check,
+        tag="rewrite",
+    )
+

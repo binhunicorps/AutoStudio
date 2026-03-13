@@ -1,0 +1,69 @@
+<!-- PAGE: P2P -->
+<section id="page-p2p" class="page">
+    <div class="p2p-layout">
+        <div class="panel p2p-left">
+            <h2 class="panel-title">Gửi File P2P</h2>
+
+            <div class="p2p-card">
+                <div class="p2p-card-head">Nhận File Qua Internet (WebRTC)</div>
+                <div class="input-group">
+                    <input id="p2p-peer-input" class="inp" type="text"
+                        placeholder="Nhập Peer ID của người gửi...">
+                    <button class="btn sm primary" onclick="webrtcConnect()">Kết nối</button>
+                </div>
+                <div id="p2p-webrtc-status" class="muted p2p-meta">Nhập Peer ID để kết nối và tải file trực tiếp.</div>
+                <div id="p2p-webrtc-progress" class="hidden" style="margin-top:8px">
+                    <div class="pbar"><div class="pfill" id="p2p-webrtc-pfill"></div></div>
+                    <div class="ptext" id="p2p-webrtc-ptext">0%</div>
+                </div>
+                <div id="p2p-webrtc-controls" class="hidden" style="margin-top:8px;gap:8px">
+                    <button id="btn-webrtc-pause" class="btn sm" onclick="webrtcPause()">⏸ Tạm dừng</button>
+                    <button class="btn sm danger" onclick="webrtcCancel()">✕ Huỷ</button>
+                </div>
+            </div>
+
+            <div class="p2p-card">
+                <div class="p2p-card-head">Chia Sẻ File</div>
+                <label class="field-label">Tên Nhóm File</label>
+                <input id="p2p-share-name" class="inp" type="text" placeholder="VD: Tài liệu chủ đề A">
+                <div class="btn-row p2p-pick-actions">
+                    <button class="btn sm" onclick="p2pPickFiles()">Chọn 1/N File</button>
+                    <button class="btn sm" onclick="p2pPickFolder()">Chọn Folder</button>
+                </div>
+                <div id="p2p-dropzone" class="p2p-dropzone">
+                    File gốc được giữ nguyên tại máy gửi. Hãy dùng nút Chọn 1/N File hoặc Chọn Folder.
+                </div>
+                <div id="p2p-picked-summary" class="muted p2p-meta">Chưa chọn file nào.</div>
+                <div id="p2p-picked-files" class="p2p-picked-files"></div>
+                <button id="btn-p2p-create" class="btn primary" onclick="p2pShareAndConnect()" disabled style="margin-top:10px;width:100%">Chia sẻ</button>
+                <div id="p2p-peer-id-wrap" class="p2p-token-wrap hidden" style="margin-top:8px">
+                    <span>Peer ID:</span>
+                    <code id="p2p-peer-id">---</code>
+                    <button class="btn sm" onclick="copyP2PPeerId()">Copy</button>
+                    <span id="p2p-peer-status" class="muted" style="font-size:11px">Đang kết nối...</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel p2p-right">
+            <div class="panel-head-row">
+                <h2 class="panel-title" style="margin:0;border:none;padding:0;">Quản Lý P2P</h2>
+                <button class="btn sm" onclick="loadP2PShares()">Làm mới</button>
+            </div>
+            <div class="p2p-right-grid">
+                <div class="p2p-list-col">
+                    <div class="p2p-list-head">Danh Sách File P2P Đã Tạo</div>
+                    <div id="p2p-share-list" class="p2p-share-list">
+                        <div class="tbl-empty">Chưa có share nào</div>
+                    </div>
+                </div>
+                <div class="p2p-list-col">
+                    <div class="p2p-list-head">Danh Sách File P2P Đã Download</div>
+                    <div id="p2p-downloaded-list" class="p2p-share-list">
+                        <div class="tbl-empty">Chưa tải file nào</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>

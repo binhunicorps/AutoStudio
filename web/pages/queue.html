@@ -1,0 +1,53 @@
+<!-- PAGE: Queue Manager -->
+<section id="page-queue" class="page">
+    <div class="writer-layout">
+        <!-- Left: Add form -->
+        <div class="panel left-panel">
+            <h2 class="panel-title">➕ Thêm Project</h2>
+
+            <label class="field-label">Chủ đề / Nội dung / Yêu cầu <span class="req">*</span></label>
+            <textarea id="q-topic" class="inp" rows="3" placeholder="Nhập chủ đề..."></textarea>
+
+            <label class="field-label">Ngôn ngữ</label>
+            <select id="q-lang" class="inp sel">
+                <option value="English" selected>Tiếng Anh</option>
+                <option value="Tiếng Việt">Tiếng Việt</option>
+                <option value="日本語">Tiếng Nhật</option>
+                <option value="한국어">Tiếng Hàn</option>
+            </select>
+
+            <label class="field-label">Content Style</label>
+            <select id="q-style" class="inp sel"></select>
+
+            <label class="field-label">Model Viết Content</label>
+            <select id="q-model" class="inp sel"></select>
+
+            <label class="field-label">Video Prompt Style</label>
+            <select id="q-vstyle" class="inp sel"></select>
+
+            <label class="field-label">Model Video Prompt</label>
+            <select id="q-model-video" class="inp sel"></select>
+
+            <div class="btn-row">
+                <button id="q-add-btn" class="btn primary" onclick="addQueueItem()">➕ Thêm Vào Hàng Chờ</button>
+            </div>
+            <button id="q-cancel-edit" class="btn sm danger hidden" onclick="cancelQueueEdit()"
+                style="margin-top:8px;">✕ Hủy Chỉnh Sửa</button>
+        </div>
+
+        <!-- Right: Queue list -->
+        <div class="panel right-panel">
+            <div class="tab-bar">
+                <span class="tab active q-status" style="cursor:default">📋 Hàng Chờ — <span
+                        id="q-count">0</span> project <span id="q-progress" class="muted"></span></span>
+                <div class="tab-actions">
+                    <button id="q-start-btn" class="btn sm primary" onclick="startQueue()">▶ Chạy</button>
+                    <button id="q-clear-btn" class="btn sm danger" onclick="clearQueue()">🗑 Xóa Tất Cả</button>
+                </div>
+            </div>
+            <div id="q-list" class="queue-list">
+                <div class="tbl-empty">Chưa có project trong hàng chờ</div>
+            </div>
+        </div>
+    </div>
+</section>

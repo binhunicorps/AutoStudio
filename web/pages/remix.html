@@ -1,0 +1,139 @@
+<!-- PAGE: Remix Content -->
+<section id="page-remix" class="page">
+    <div class="writer-layout">
+        <!-- Left Panel -->
+        <div class="panel left-panel">
+            <h2 class="panel-title">🔄 Remix Content</h2>
+
+            <div class="left-section">
+                <label class="field-label">URL YouTube Đối Thủ <span class="req">*</span></label>
+                <div class="input-group" style="gap:6px">
+                    <input id="inp-yt-url" class="inp" type="url" placeholder="Dán URL YouTube video đối thủ...">
+                </div>
+
+                <label class="field-label" style="margin-top:10px">Ngôn ngữ đích</label>
+                <select id="sel-remix-lang" class="inp sel">
+                    <option value="English" selected>Tiếng Anh</option>
+                    <option value="Tiếng Việt">Tiếng Việt</option>
+                    <option value="日本語">Tiếng Nhật</option>
+                    <option value="한국어">Tiếng Hàn</option>
+                    <option value="Español">Tiếng Tây Ban Nha</option>
+                    <option value="Français">Tiếng Pháp</option>
+                </select>
+            </div>
+
+            <div class="left-section">
+                <label class="field-label">Model Viết Content</label>
+                <select id="sel-remix-model" class="inp sel"></select>
+
+                <label class="field-label">Model Phân Tích</label>
+                <select id="sel-remix-model-analyze" class="inp sel"></select>
+
+                <label class="field-label">Video Prompt Style</label>
+                <select id="sel-remix-vstyle" class="inp sel"></select>
+
+                <label class="field-label">Model Video Prompt</label>
+                <select id="sel-remix-model-video" class="inp sel"></select>
+            </div>
+
+            <div class="left-section run-controls">
+                <div class="btn-row main-actions">
+                    <button id="btn-remix-start" class="btn primary" onclick="startRewritePipeline()">▶ Bắt Đầu Tất Cả</button>
+                    <button id="btn-remix-pause" class="btn" onclick="togglePause()" disabled>⏸ Tạm Dừng</button>
+                    <button id="btn-remix-stop" class="btn danger" onclick="stopPipeline()" disabled>✕ Huỷ</button>
+                </div>
+
+                <div class="btn-row step-actions remix-step-actions">
+                    <button class="btn sm" onclick="runRemixStep('extract')" title="Trích xuất video">📥 Trích xuất</button>
+                    <button class="btn sm" onclick="runRemixStep('analyze')" title="Đếm ký tự + Phân tích AI">🔍 Phân tích</button>
+                    <button class="btn sm" onclick="runRemixStep('rewrite')" title="Viết lại content">✍ Viết lại</button>
+                    <button class="btn sm" onclick="runRemixStep('split')" title="Tách đoạn">✂ Tách đoạn</button>
+                    <button class="btn sm" onclick="runRemixStep('video')" title="Tạo video prompt">🎬 Video Prompt</button>
+                </div>
+
+                <div id="remix-progress-area" class="progress-area hidden">
+                    <div class="pbar">
+                        <div class="pfill" id="remix-pfill"></div>
+                    </div>
+                    <div class="ptext" id="remix-ptext">Đang chờ...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Panel -->
+        <div class="panel right-panel">
+            <div class="tab-bar">
+                <button class="tab active" data-tab="remix-original" onclick="switchRemixTab('remix-original')">📋 Content Gốc</button>
+                <button class="tab" data-tab="remix-script" onclick="switchRemixTab('remix-script')">✏ Content</button>
+                <button class="tab" data-tab="remix-video" onclick="switchRemixTab('remix-video')">🎬 Video Prompt</button>
+            </div>
+
+            <!-- Original Content tab -->
+            <div id="tab-remix-original" class="tab-pane active">
+                <div id="remix-original-empty" class="tbl-empty">Nhập URL YouTube và nhấn "Trích xuất" để xem nội dung gốc</div>
+                <div id="remix-original-content" class="remix-og-content hidden">
+                    <!-- Title -->
+                    <div class="remix-og-title-row">
+                        <div id="remix-og-title" class="remix-og-value"></div>
+                    </div>
+
+                    <!-- Compact metadata row -->
+                    <div class="remix-og-info-row">
+                        <span class="remix-og-chip">📅 <span id="remix-og-date"></span></span>
+                        <span class="remix-og-chip">👁 <span id="remix-og-views"></span></span>
+                        <span class="remix-og-chip">🎥 <span id="remix-og-channel"></span></span>
+                        <span class="remix-og-chip">⏱ <span id="remix-og-duration"></span></span>
+                    </div>
+
+                    <!-- Tags inline -->
+                    <div class="remix-og-info-row">
+                        <span class="remix-og-chip-label">🏷 Từ khoá:</span>
+                        <span id="remix-og-tags" class="remix-og-tags-inline"></span>
+                    </div>
+
+                    <!-- 2-column: Description + Subtitles -->
+                    <div class="remix-og-two-col">
+                        <div class="remix-og-col">
+                            <div class="remix-og-label">📝 Mô tả</div>
+                            <pre id="remix-og-desc" class="remix-og-text-box"></pre>
+                        </div>
+                        <div class="remix-og-col">
+                            <div class="remix-og-label">📋 Nội dung gốc (Subtitles)</div>
+                            <pre id="remix-og-subtitles" class="remix-og-text-box"></pre>
+                        </div>
+                    </div>
+
+                    <!-- AI Analysis Panel -->
+                    <div class="remix-og-section">
+                        <div class="remix-og-label">🤖 Phân Tích AI</div>
+                        <div id="remix-og-analysis" class="remix-og-analysis">
+                            <div class="remix-og-analysis-empty muted">Nhấn "Bắt Đầu" để AI phân tích content đối thủ</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Rewritten Content tab -->
+            <div id="tab-remix-script" class="tab-pane">
+                <div class="script-editor">
+                    <pre id="remix-script-lines" class="script-lines">1</pre>
+                    <textarea id="remix-script-output" class="output-box"
+                        placeholder="Nội dung content viết lại sẽ hiển thị ở đây..."></textarea>
+                </div>
+            </div>
+
+            <!-- Video Prompt tab -->
+            <div id="tab-remix-video" class="tab-pane">
+                <div class="tbl-head">
+                    <div class="th c-chk"><input type="checkbox" id="remix-chk-all"></div>
+                    <div class="th c-idx">#</div>
+                    <div class="th c-seg">Segments</div>
+                    <div class="th c-prm">Video Prompt</div>
+                </div>
+                <div class="tbl-body" id="remix-tbl-body">
+                    <div class="tbl-empty">Chưa có dữ liệu</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
